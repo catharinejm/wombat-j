@@ -173,7 +173,7 @@
   [[_ params & body :as lambda]]
   (println "Compiling:" lambda)
   (let [fv (vec (free-vars lambda))
-        cw (ClassWriter. ClassWriter/COMPUTE_MAXS)
+        cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
         lname (str "lambda_" (next-id))
         fqname (str "cljstatic/scheme2/" lname)
         _ (println "fqname:" fqname)
@@ -219,6 +219,7 @@
 
 (defn emit-value
   [context gen const]
+  (println "emit-value" context const)
   (cond
    (nil? const)
    (. gen visitInsn Opcodes/ACONST_NULL)
@@ -347,6 +348,7 @@
 
 (defmethod emit-seq 'if
   [env context gen [_ condition then else :as the-if]]
+  (println "emit-seq if" the-if context)
   (when-not (<= 3 (count the-if) 4)
     (throw (IllegalArgumentException. "if takes 2 or 3 forms")))
   (let [null-label (. gen newLabel)
@@ -356,7 +358,7 @@
     (. gen dup)
     (. gen ifNull null-label)
     (. gen getStatic boolean-object-type "FALSE" boolean-object-type)
-    (. gen ifCmp boolean-object-type false-label)
+    (. gen ifCmp boolean-object-type GeneratorAdapter/EQ false-label)
     (emit env context gen then)
     (. gen goTo end-label)
     (. gen mark null-label)
@@ -376,8 +378,6 @@
   (println "context:" context)
   (let [mt (MethodType/methodType Object ALambda (into-array Class (repeat (count args) Object)))]
     (emit env :context/expression gen fun)
-    (. gen dup)
-    (. gen invokeVirtual alambda-type (Method/getMethod "void registerForBootstrap()"))
     (doseq [a args]
       (emit env :context/expression gen a))
     (. gen invokeDynamic "invoke" (.toMethodDescriptorString mt) bootstrap-handle (make-array Object 0))
