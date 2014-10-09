@@ -1,0 +1,18 @@
+* Analyze phase
+** Constants
+*** Numbers
+*** Strings
+*** Characters
+*** Boolean
+*** e.g. { :op :constant, :id 0, :type :Integer, :value 42, :children [:class :value] } 
+** Symbols
+*** Attempt to resolve
+*** Failure throws an exception
+*** e.g. 'foo => { :type :symbol, :name :foo, :owning-scope <expr that defined sym>, :value-expr <expr that defines value>, :children [:name :owning-scope :value-expr] }
+** Lambdas
+*** Compile during analysis
+**** Instance attributes for closed-overs
+**** Static attributes for constants?
+*** { :type :lambda, :params [:x :y], :closes [...], :statements [<statement exprs>], :return <tail expr>, :parent-scope <expr of parent>, :children [:params :closes :statements :return :parent-scope] }
+** Invocation
+*** 
