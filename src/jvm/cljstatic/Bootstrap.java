@@ -23,11 +23,10 @@ public class Bootstrap implements Opcodes {
     public static CallSite bootstrap(MethodHandles.Lookup caller, String name, MethodType methodType)
         throws NoSuchMethodException, IllegalAccessException, ClassNotFoundException {
 
-        // calls++;
+        calls++;
 
-        // Class targetClass = target.getClass();
-        MethodHandle meth = caller.findVirtual(Sample.class, name, methodType.dropParameterTypes(0, 1));
-        return new ConstantCallSite(meth);
+        MethodHandle mh = MethodHandles.invoker(methodType.dropParameterTypes(0, 1));
+        return new ConstantCallSite(mh);
     }
 
     public static void main(String[] args)
@@ -36,28 +35,41 @@ public class Bootstrap implements Opcodes {
         buildClass();
 
         Class ex = Class.forName("cljstatic.Example", true, classLoader);
-        ex.getMethod("blah").invoke(null);
+
+        Object o = ex.newInstance();
+        ex.getMethod("blah", ALambda.class).invoke(o, new Sample());
+        ex.getMethod("blah", ALambda.class).invoke(o, new SubSample());
+        
+        System.out.println("Called bootstrap " + calls + " times.");
     }
 
     static void buildClass() {
         ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
-        Method m = new Method("blah", Type.VOID_TYPE, new Type[0]);
-        GeneratorAdapter gen = new GeneratorAdapter(Opcodes.ACC_PUBLIC + Opcodes.ACC_STATIC, m, null, null, cw);
-
-        MethodType mt = MethodType.methodType(CallSite.class, MethodHandles.Lookup.class, String.class, MethodType.class);
-        Handle bh = new Handle(Opcodes.H_INVOKESTATIC, "cljstatic/ALambda", "bootstrap", mt.toMethodDescriptorString());
-        
         cw.visit(V1_7, ACC_PUBLIC, "cljstatic/Example", null, "java/lang/Object", null);
 
+        Method ctor = new Method("<init>", Type.VOID_TYPE, new Type[0]);
+        GeneratorAdapter ctorgen = new GeneratorAdapter(Opcodes.ACC_PUBLIC, ctor, null, null, cw);
+
+        ctorgen.visitCode();
+        ctorgen.loadThis();
+        ctorgen.invokeConstructor(Type.getType(Object.class), Method.getMethod("void <init>()"));
+        ctorgen.returnValue();
+        ctorgen.endMethod();
+
+        Type[] ts = new Type[1];
+        ts[0] = Type.getType(ALambda.class);
+        Method m = new Method("blah", Type.VOID_TYPE, ts);
+        GeneratorAdapter gen = new GeneratorAdapter(Opcodes.ACC_PUBLIC, m, null, null, cw);
+
         gen.visitCode();
-        gen.newInstance(Type.getType(Sample.class));
+        gen.loadArg(0);
         gen.dup();
-        gen.invokeConstructor(Type.getType(Sample.class), new Method("<init>", Type.VOID_TYPE, new Type[0]));
-        gen.dup();
-        gen.invokeVirtual(Type.getType(Sample.class), Method.getMethod("void registerForBootstrap()"));
+        gen.push(1);
+        gen.invokeVirtual(Type.getType(ALambda.class), Method.getMethod("java.lang.invoke.MethodHandle getHandle(int)"));
+        gen.swap();
         gen.push("input string");
 
-        gen.invokeDynamic("doit", MethodType.methodType(String.class, ALambda.class, String.class).toMethodDescriptorString(), bh);
+        gen.invokeVirtual(Type.getType(MethodHandle.class), Method.getMethod("String invoke(cljstatic.ALambda, Object)"));
 
         gen.getStatic(Type.getType(System.class), "out", Type.getType(PrintStream.class));
         gen.swap();
