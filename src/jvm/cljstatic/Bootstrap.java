@@ -25,8 +25,7 @@ public class Bootstrap implements Opcodes {
 
         calls++;
 
-        MethodHandle mh = MethodHandles.invoker(methodType.dropParameterTypes(0, 1));
-        return new ConstantCallSite(mh);
+        return new ConstantCallSite(Sample.handle.asType(methodType.changeParameterType(0, ILambda.class)));
     }
 
     public static void main(String[] args)
@@ -34,52 +33,90 @@ public class Bootstrap implements Opcodes {
 
         buildClass();
 
-        Class ex = Class.forName("cljstatic.Example", true, classLoader);
+        Class ex = Class.forName("cljstatic.SubExample", true, classLoader);
 
-        Object o = ex.newInstance();
-        ex.getMethod("blah", ALambda.class).invoke(o, new Sample());
-        ex.getMethod("blah", ALambda.class).invoke(o, new SubSample());
+        Example o = (Example) ex.newInstance();
+        MethodHandle blah = MethodHandles.lookup().findVirtual(ex, "blah", MethodType.methodType(void.class, ILambda.class)).bindTo(o);
+
+        long before = System.currentTimeMillis();
+        Sample s = new Sample();
+        // Example o = new Example();
         
-        System.out.println("Called bootstrap " + calls + " times.");
+        for (int i = 0; i < 30000000; ++i) {
+            // ex.getMethod("blah", ILambda.class).invoke(o, s);
+            // blah.invoke(s);
+            o.blah(s);
+        }
+        long after = System.currentTimeMillis();
+
+        System.out.printf("elapsed: %dms\n", after - before);
+        // ex.getMethod("blah", ILambda.class).invoke(o, new SubSample());
+        
+        // System.out.println("Called bootstrap " + calls + " times.");
     }
 
     static void buildClass() {
         ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
-        cw.visit(V1_7, ACC_PUBLIC, "cljstatic/Example", null, "java/lang/Object", null);
+        cw.visit(V1_7, ACC_PUBLIC, "cljstatic/SubExample", null, "cljstatic/Example", null);
 
         Method ctor = new Method("<init>", Type.VOID_TYPE, new Type[0]);
         GeneratorAdapter ctorgen = new GeneratorAdapter(Opcodes.ACC_PUBLIC, ctor, null, null, cw);
 
         ctorgen.visitCode();
         ctorgen.loadThis();
-        ctorgen.invokeConstructor(Type.getType(Object.class), Method.getMethod("void <init>()"));
+        ctorgen.invokeConstructor(Type.getType(Example.class), Method.getMethod("void <init>()"));
         ctorgen.returnValue();
         ctorgen.endMethod();
 
         Type[] ts = new Type[1];
-        ts[0] = Type.getType(ALambda.class);
+        ts[0] = Type.getType(ILambda.class);
         Method m = new Method("blah", Type.VOID_TYPE, ts);
         GeneratorAdapter gen = new GeneratorAdapter(Opcodes.ACC_PUBLIC, m, null, null, cw);
 
         gen.visitCode();
         gen.loadArg(0);
-        gen.dup();
-        gen.push(1);
-        gen.invokeVirtual(Type.getType(ALambda.class), Method.getMethod("java.lang.invoke.MethodHandle getHandle(int)"));
-        gen.swap();
+
+        // With self-bound method handle
+        // gen.push(1);
+        // gen.invokeInterface(Type.getType(ILambda.class), Method.getMethod("java.lang.invoke.MethodHandle getHandle(int)"));
+        // gen.push("input string");
+        // gen.invokeVirtual(Type.getType(MethodHandle.class), Method.getMethod("String invoke(String)"));
+
+        // Handle with no self binding
+        // gen.dup();
+        // gen.push(1);
+        // gen.invokeInterface(Type.getType(ILambda.class), Method.getMethod("java.lang.invoke.MethodHandle getHandle(int)"));
+        // gen.swap();
+        // gen.push("input string");
+        // gen.invokeVirtual(Type.getType(MethodHandle.class), Method.getMethod("String invoke(cljstatic.ILambda, String)"));
+
+        // Direct invokeVirtual
+        // gen.checkCast(Type.getType(Sample.class));
+        // gen.push("input string");
+        // gen.invokeVirtual(Type.getType(Sample.class), Method.getMethod("String doit(String)"));
+
+        // invokeInterface
+        // gen.push("input string");
+        // gen.invokeInterface(Type.getType(ILambda.class), Method.getMethod("String doit(String)"));
+
+        // println
+        // gen.getStatic(Type.getType(System.class), "out", Type.getType(PrintStream.class));
+        // gen.swap();
+        // gen.invokeVirtual(Type.getType(PrintStream.class), Method.getMethod("void println(String)"));
+
+        // invokeDynamic
+        Handle h = new Handle(H_INVOKESTATIC, "cljstatic/Bootstrap", "bootstrap",
+                              MethodType.methodType(CallSite.class, MethodHandles.Lookup.class, String.class, MethodType.class)
+                              .toMethodDescriptorString());
+
         gen.push("input string");
-
-        gen.invokeVirtual(Type.getType(MethodHandle.class), Method.getMethod("String invoke(cljstatic.ALambda, Object)"));
-
-        gen.getStatic(Type.getType(System.class), "out", Type.getType(PrintStream.class));
-        gen.swap();
-        gen.invokeVirtual(Type.getType(PrintStream.class), Method.getMethod("void println(String)"));
+        gen.invokeDynamic("foo", MethodType.methodType(String.class, ILambda.class, String.class).toMethodDescriptorString(), h);
 
         gen.returnValue();
         gen.endMethod();
 
         cw.visitEnd();
 
-        classLoader.defineClass("cljstatic.Example", cw.toByteArray(), null);
+        classLoader.defineClass("cljstatic.SubExample", cw.toByteArray(), null);
     }
 }
