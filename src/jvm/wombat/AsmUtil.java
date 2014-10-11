@@ -1,4 +1,4 @@
-package cljstatic;
+package wombat;
 
 import org.objectweb.asm.commons.GeneratorAdapter;
 

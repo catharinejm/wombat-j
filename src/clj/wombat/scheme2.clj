@@ -1,10 +1,10 @@
-(ns cljstatic.scheme2
+(ns wombat.scheme2
   (:require [clojure.core.match :refer [match]])
   (:import [org.objectweb.asm ClassWriter ClassVisitor Opcodes Type Handle]
            [org.objectweb.asm.commons GeneratorAdapter Method]
            [clojure.lang DynamicClassLoader Compiler RT]
            [java.lang.invoke MethodType MethodHandle MethodHandles MethodHandles$Lookup]
-           [cljstatic ILambda AsmUtil])
+           [wombat ILambda AsmUtil])
   (:refer-clojure :exclude [compile]))
 
 (def ^:dynamic *class-loader* (DynamicClassLoader.))
@@ -265,10 +265,10 @@
     (let [fv (vec (free-vars lambda))
           cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
           lname (str "lambda_" (next-id))
-          fqname (str "cljstatic/scheme2/" lname)
+          fqname (str "wombat/scheme2/" lname)
           _ (println "fqname:" fqname)
           dotname (.replace fqname "/" ".")
-          ifaces (into-array String ["cljstatic/ILambda"])
+          ifaces (into-array String ["wombat/ILambda"])
           env {:params params, :closed-overs fv, :locals {} :thistype (Type/getObjectType fqname)}]
       (. cw visit Opcodes/V1_7 Opcodes/ACC_PUBLIC fqname nil "java/lang/Object" ifaces)
       (gen-closure-fields cw fv)

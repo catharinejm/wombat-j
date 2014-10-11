@@ -1,4 +1,4 @@
-(ns cljstatic.core
+(ns wombat.core
   (:import [org.objectweb.asm ClassWriter ClassVisitor Opcodes Type]
            [org.objectweb.asm.commons GeneratorAdapter Method]
            [clojure.lang DynamicClassLoader Compiler RT])
@@ -117,7 +117,7 @@
 (comment
   (def cw (ClassWriter. ClassWriter/COMPUTE_MAXS))
   (. cw (visit Opcodes/V1_5 Opcodes/ACC_PUBLIC
-               "cljstatic/core/TestClass" nil "java/lang/Object" (make-array String 0)))
+               "wombat/core/TestClass" nil "java/lang/Object" (make-array String 0)))
 
   (let [m (Method. "turd" Type/VOID_TYPE (into-array Type [(Type/getType String)]))
         gen (GeneratorAdapter. (bit-or Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)
@@ -136,6 +136,6 @@
 
   (.visitEnd cw)
 
-  (. @Compiler/LOADER (defineClass "cljstatic.core.TestClass" (.toByteArray cw) nil))
+  (. @Compiler/LOADER (defineClass "wombat.core.TestClass" (.toByteArray cw) nil))
 
-  (import 'cljstatic.core.TestClass))
+  (import 'wombat.core.TestClass))

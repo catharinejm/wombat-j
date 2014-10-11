@@ -1,6 +1,6 @@
-(ns cljstatic.core-test
+(ns wombat.core-test
   (:require [clojure.test :refer :all]
-            [cljstatic.core :refer :all]))
+            [wombat.core :refer :all]))
 
 (deftest a-test
   (testing "FIXME, I fail."

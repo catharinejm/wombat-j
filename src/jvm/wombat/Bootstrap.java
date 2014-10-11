@@ -1,4 +1,4 @@
-package cljstatic;
+package wombat;
 
 import java.lang.invoke.*;
 import java.io.PrintStream;
@@ -33,7 +33,7 @@ public class Bootstrap implements Opcodes {
 
         buildClass();
 
-        Class ex = Class.forName("cljstatic.SubExample", true, classLoader);
+        Class ex = Class.forName("wombat.SubExample", true, classLoader);
 
         Example o = (Example) ex.newInstance();
         MethodHandle blah = MethodHandles.lookup().findVirtual(ex, "blah", MethodType.methodType(void.class, ILambda.class)).bindTo(o);
@@ -57,7 +57,7 @@ public class Bootstrap implements Opcodes {
 
     static void buildClass() {
         ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
-        cw.visit(V1_7, ACC_PUBLIC, "cljstatic/SubExample", null, "cljstatic/Example", null);
+        cw.visit(V1_7, ACC_PUBLIC, "wombat/SubExample", null, "wombat/Example", null);
 
         Method ctor = new Method("<init>", Type.VOID_TYPE, new Type[0]);
         GeneratorAdapter ctorgen = new GeneratorAdapter(Opcodes.ACC_PUBLIC, ctor, null, null, cw);
@@ -88,7 +88,7 @@ public class Bootstrap implements Opcodes {
         // gen.invokeInterface(Type.getType(ILambda.class), Method.getMethod("java.lang.invoke.MethodHandle getHandle(int)"));
         // gen.swap();
         // gen.push("input string");
-        // gen.invokeVirtual(Type.getType(MethodHandle.class), Method.getMethod("String invoke(cljstatic.ILambda, String)"));
+        // gen.invokeVirtual(Type.getType(MethodHandle.class), Method.getMethod("String invoke(wombat.ILambda, String)"));
 
         // Direct invokeVirtual
         // gen.checkCast(Type.getType(Sample.class));
@@ -105,7 +105,7 @@ public class Bootstrap implements Opcodes {
         // gen.invokeVirtual(Type.getType(PrintStream.class), Method.getMethod("void println(String)"));
 
         // invokeDynamic
-        Handle h = new Handle(H_INVOKESTATIC, "cljstatic/Bootstrap", "bootstrap",
+        Handle h = new Handle(H_INVOKESTATIC, "wombat/Bootstrap", "bootstrap",
                               MethodType.methodType(CallSite.class, MethodHandles.Lookup.class, String.class, MethodType.class)
                               .toMethodDescriptorString());
 
@@ -117,6 +117,6 @@ public class Bootstrap implements Opcodes {
 
         cw.visitEnd();
 
-        classLoader.defineClass("cljstatic.SubExample", cw.toByteArray(), null);
+        classLoader.defineClass("wombat.SubExample", cw.toByteArray(), null);
     }
 }

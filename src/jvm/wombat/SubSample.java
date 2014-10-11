@@ -1,4 +1,4 @@
-package cljstatic;
+package wombat;
 
 import java.lang.invoke.*;
 import clojure.lang.*;

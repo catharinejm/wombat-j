@@ -1,4 +1,4 @@
-(ns cljstatic.scheme
+(ns wombat.scheme
   (:import [org.objectweb.asm ClassWriter ClassVisitor Opcodes Type]
            [org.objectweb.asm.commons GeneratorAdapter Method]
            [clojure.lang DynamicClassLoader Compiler RT])
@@ -70,7 +70,7 @@
   (fn [form] (first form)))
 
 (defn lambda-name [l]
-  (str "cljstatic/scheme/" (:name l)))
+  (str "wombat/scheme/" (:name l)))
 
 (defn lambda-type [l]
   (Type/getObjectType (lambda-name l)))
