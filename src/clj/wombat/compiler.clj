@@ -12,8 +12,8 @@
 
 (dotimes [n 22]
   (eval `(gen-interface :name ~(symbol (str "wombat.ILambda" n))
-                        :extends [wombat.ILambda]
-                        :methods [[invoke [~@(repeat n Object)] Object]])))
+                        :extends [~'wombat.ILambda]
+                        :methods [[~'invoke [~@(repeat n Object)] ~'Object]])))
 
 (def ^:dynamic *print-debug* nil)
 (defn debug [& vals]
