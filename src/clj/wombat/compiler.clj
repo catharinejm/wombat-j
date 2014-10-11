@@ -10,7 +10,12 @@
 
 (def ^:dynamic *class-loader* (DynamicClassLoader.))
 
-(def ^:dynamic *print-debug*)
+(dotimes [n 22]
+  (eval `(gen-interface :name ~(symbol (str "wombat.ILambda" n))
+                        :extends [wombat.ILambda]
+                        :methods [[invoke [~@(repeat n Object)] Object]])))
+
+(def ^:dynamic *print-debug* nil)
 (defn debug [& vals]
   (when *print-debug*
     (apply println vals)))
@@ -82,7 +87,7 @@
        (list* 'let (map list bind-syms sani-binds) (map (partial sanitize let-env) body)))
 
      (['define name & val] :seq)
-     (let [sani-name (sanitize-name name)]
+     (let [sani-name (get @global-env name (sanitize-name name))]
        (swap! global-env assoc name sani-name)
        (list* 'define sani-name (map (partial sanitize (assoc env name sani-name)) val)))
 
@@ -237,7 +242,8 @@
     (. clinitgen returnValue)
     (. clinitgen endMethod))
 
-  (let [gen (GeneratorAdapter. Opcodes/ACC_PUBLIC (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)")
+  (let [gen (GeneratorAdapter. Opcodes/ACC_PUBLIC
+                               (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)")
                                nil nil cw)
         false-label (. gen newLabel)
         end-label (. gen newLabel)]
@@ -278,7 +284,7 @@
   [[_ params & body :as lambda]]
   (when-not (get @*compiled-lambdas* lambda)
     (debug "Compiling:" lambda)
-    (let [fv (vec (free-vars lambda))
+    (let [fv (vec (apply disj (free-vars lambda) (vals @global-env)))
           cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
           lname (str "lambda_" (next-id))
           fqname (str "wombat/" lname)
@@ -464,10 +470,10 @@
   [env context gen [_ name val :as form]]
   (when (> 3 (count form))
     (throw (IllegalArgumentException. "define only takes one value")))
-  (if (contains? @global-bindings name)
-    (.setTarget ^VolatileCallSite (@global-bindings name) (eval* val))
-    (swap! global-bindings assoc name
-           (VolatileCallSite. (MethodHandles/constant Object (eval* val)))))
+  (let [handle (MethodHandles/constant Object (eval* val))]
+    (if (contains? @global-bindings name)
+      (.setTarget ^VolatileCallSite (@global-bindings name) handle)
+      (swap! global-bindings assoc name (VolatileCallSite. handle))))
   (emit-global gen name))
 
 (defmethod emit-seq 'if
@@ -522,7 +528,8 @@
 
   (doseq [a args]
     (emit env :context/expression gen a))
-  (. gen invokeVirtual (asmtype MethodHandle) (Method. "invoke" object-type (into-array Type (cons ilambda-type (repeat (count args) object-type)))))
+  (. gen invokeVirtual (asmtype MethodHandle)
+     (Method. "invoke" object-type (into-array Type (cons ilambda-type (repeat (count args) object-type)))))
   (when (= context :context/statement)
     (. gen pop)))
 
