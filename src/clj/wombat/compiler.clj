@@ -373,8 +373,8 @@
 (defmethod emit-dup clojure.lang.Symbol
   [gen ^clojure.lang.Symbol sym]
   (println "emit-dup symbol" sym)
-  (. gen push (.ns sym))
-  (. gen push (.name sym))
+  (. gen push (namespace sym))
+  (. gen push (name sym))
   (. gen invokeStatic (asmtype clojure.lang.Symbol) (Method/getMethod "clojure.lang.Symbol intern(String,String)")))
 
 (defmethod emit-dup clojure.lang.Seqable

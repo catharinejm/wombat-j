@@ -8,4 +8,5 @@
                  [org.clojure/core.match "0.2.1"]]
   :source-paths ["src/clj"]
   :java-source-paths ["src/jvm"]
-  :javac-options ["-target" "1.7" "-source" "1.7"])
+  :javac-options ["-target" "1.7" "-source" "1.7"]
+  :main wombat.core)
