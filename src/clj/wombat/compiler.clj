@@ -3,11 +3,20 @@
   (:import [org.objectweb.asm ClassWriter ClassVisitor Opcodes Type Handle]
            [org.objectweb.asm.commons GeneratorAdapter Method]
            [clojure.lang DynamicClassLoader Compiler RT]
-           [java.lang.invoke MethodType MethodHandle MethodHandles MethodHandles$Lookup]
-           [wombat ILambda AsmUtil])
+           [java.lang.invoke MethodType MethodHandle MethodHandles MethodHandles$Lookup
+            CallSite VolatileCallSite]
+           [wombat ILambda AsmUtil Global])
   (:refer-clojure :exclude [compile]))
 
 (def ^:dynamic *class-loader* (DynamicClassLoader.))
+
+(def ^:dynamic *print-debug*)
+(defn debug [& vals]
+  (when *print-debug*
+    (apply println vals)))
+
+(def global-env (atom {}))
+(def global-bindings (atom {}))
 
 (def seqable?
   "True if the given value implements clojure.lang.Seqable. Note that
@@ -72,6 +81,11 @@
                                    [e sani-bs]))]
        (list* 'let (map list bind-syms sani-binds) (map (partial sanitize let-env) body)))
 
+     (['define name & val] :seq)
+     (let [sani-name (sanitize-name name)]
+       (swap! global-env assoc name sani-name)
+       (list* 'define sani-name (map (partial sanitize (assoc env name sani-name)) val)))
+
      :else
      (map (partial sanitize env) form))
 
@@ -114,7 +128,9 @@
          emit-value
          emit-dup
          emit-symbol
-         emit-string)
+         emit-string
+         eval*
+         scheme-eval)
 
 (defn asmtype ^Type [^Class cls] (Type/getType cls))
 (def object-type (asmtype Object))
@@ -161,7 +177,7 @@
 
 (defn gen-body
   [cw {:keys [params] :as env} body]
-  (println "gen-body" body)
+  (debug "gen-body" body)
   (let [m (Method. "invoke" object-type (into-array Type (repeat (count params) object-type)))
         gen (GeneratorAdapter. Opcodes/ACC_PUBLIC m nil nil cw)]
     (. gen visitCode)
@@ -261,12 +277,12 @@
   Returns a vector of [<class name>, <closed-overs>, <bytecode>]"
   [[_ params & body :as lambda]]
   (when-not (get @*compiled-lambdas* lambda)
-    (println "Compiling:" lambda)
+    (debug "Compiling:" lambda)
     (let [fv (vec (free-vars lambda))
           cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
           lname (str "lambda_" (next-id))
           fqname (str "wombat/" lname)
-          _ (println "fqname:" fqname)
+          _ (debug "fqname:" fqname)
           dotname (.replace fqname "/" ".")
           ifaces (into-array String ["wombat/ILambda"])
           env {:params params, :closed-overs fv, :locals {} :thistype (Type/getObjectType fqname)}]
@@ -290,6 +306,20 @@
    :else
    (emit-value context gen form)))
 
+(def global-bootstrap
+  (Handle. Opcodes/H_INVOKESTATIC
+                     "wombat/Global"
+                     "bootstrap"
+                     (.toMethodDescriptorString
+                      (MethodType/methodType CallSite (into-array Class [MethodHandles$Lookup String MethodType])))))
+
+(defn emit-global
+  [gen sym]
+  (. gen invokeDynamic (name sym)
+     (.toMethodDescriptorString (MethodType/methodType Object (make-array Class 0)))
+     global-bootstrap
+     (make-array Object 0)))
+
 (defn emit-symbol
   [{:keys [params closed-overs locals thistype] :as env} context gen sym]
   (cond
@@ -301,8 +331,11 @@
      (. gen loadThis)
      (. gen getField thistype (close-name sym) object-type))
 
-   ((set (keys locals)) sym)
+   (contains? locals sym)
    (. gen loadLocal (get locals sym))
+
+   (contains? @global-bindings sym)
+   (emit-global gen sym)
 
    :else
    (throw (IllegalStateException. (str "Symbol " sym " is not defined"))))
@@ -311,7 +344,7 @@
 
 (defn emit-value
   [context gen const]
-  (println "emit-value" context const)
+  (debug "emit-value" context const)
   (cond
    (nil? const)
    (. gen visitInsn Opcodes/ACONST_NULL)
@@ -331,55 +364,55 @@
   (fn [_ n] (class n)))
 
 (defmethod emit-dup :default
-  [obj]
+  [_ obj]
   (throw (IllegalArgumentException. (str "cannot emit-dup of " obj))))
 
 (defmethod emit-dup Integer
   [gen ^Integer int]
-  (println "emit-dup int" int)
+  (debug "emit-dup int" int)
   (AsmUtil/pushInt gen int)
   (. gen invokeStatic (asmtype Integer) (Method/getMethod "Integer valueOf(int)")))
 
 (defmethod emit-dup Long
   [gen ^Long long]
-  (println "emit-dup long" long)
+  (debug "emit-dup long" long)
   (AsmUtil/pushLong gen long)
   (. gen invokeStatic (asmtype Long) (Method/getMethod "Long valueOf(long)")))
 
 (defmethod emit-dup Float
   [gen ^Float float]
                                         ; Cast up to double
-  (println "emit-dup float" float)
+  (debug "emit-dup float" float)
   (. gen push (.doubleValue float))
   (. gen invokeStatic (asmtype Double) (Method/getMethod "Double valueOf(double)")))
 
 (defmethod emit-dup Double
   [gen ^Double double]
-  (println "emit-dup double" double)
+  (debug "emit-dup double" double)
   (. gen push (.doubleValue double))
   (. gen invokeStatic (asmtype Double) (Method/getMethod "Double valueOf(double)")))
 
 (defmethod emit-dup Character
   [gen ^Character char]
-  (println "emit-dup char" char)
+  (debug "emit-dup char" char)
   (. gen push (.charValue char))
   (. gen invokeStatic (asmtype Character) (Method/getMethod "Character valueOf(char)")))
 
 (defmethod emit-dup String
   [gen ^String string]
-  (println "emit-dup string" string)
+  (debug "emit-dup string" string)
   (. gen push string))
 
 (defmethod emit-dup clojure.lang.Symbol
   [gen ^clojure.lang.Symbol sym]
-  (println "emit-dup symbol" sym)
+  (debug "emit-dup symbol" sym)
   (. gen push (namespace sym))
   (. gen push (name sym))
   (. gen invokeStatic (asmtype clojure.lang.Symbol) (Method/getMethod "clojure.lang.Symbol intern(String,String)")))
 
 (defmethod emit-dup clojure.lang.Seqable
   [gen ^clojure.lang.Seqable lis]
-  (println "emit-dup list" lis)
+  (debug "emit-dup list" lis)
   (emit-array gen object-type (map #(fn [] (emit-value :context/expression gen %)) lis))
   (. gen invokeStatic (asmtype java.util.Arrays) (Method/getMethod "java.util.List asList(Object[])"))
   (. gen invokeStatic (asmtype clojure.lang.PersistentList) (Method/getMethod "clojure.lang.IPersistentList create(java.util.List)")))
@@ -428,12 +461,18 @@
   (emit-body env context gen exprs))
 
 (defmethod emit-seq 'define
-  [& args]
-  (throw (Exception. "No define yet")))
+  [env context gen [_ name val :as form]]
+  (when (> 3 (count form))
+    (throw (IllegalArgumentException. "define only takes one value")))
+  (if (contains? @global-bindings name)
+    (.setTarget ^VolatileCallSite (@global-bindings name) (eval* val))
+    (swap! global-bindings assoc name
+           (VolatileCallSite. (MethodHandles/constant Object (eval* val)))))
+  (emit-global gen name))
 
 (defmethod emit-seq 'if
   [env context gen [_ condition then else :as the-if]]
-  (println "emit-seq if" the-if context)
+  (debug "emit-seq if" the-if context)
   (when-not (<= 3 (count the-if) 4)
     (throw (IllegalArgumentException. "if takes 2 or 3 forms")))
   (let [null-label (. gen newLabel)
@@ -471,8 +510,8 @@
 
 (defmethod emit-seq -invoke-
   [env context gen [fun & args :as call]]
-  (println "emitting invoke:" call)
-  (println "context:" context)
+  (debug "emitting invoke:" call)
+  (debug "context:" context)
 
   (emit env :context/expression gen fun)
   (. gen dup)
@@ -487,10 +526,15 @@
   (when (= context :context/statement)
     (. gen pop)))
 
+(defn eval*
+  "Low-level eval call. Requires a pre-sanitized input."
+  [form]
+  (let [[name _ bytecode] (compile (list 'lambda () form))]
+    (.defineClass *class-loader* name bytecode form)
+    (.. (Class/forName name true *class-loader*) newInstance invoke)))
 
 (defn scheme-eval
+  "Top-level eval call. Initializes env and sanitizes input."
   [form]
   (binding [*compiled-lambdas* (atom #{})]
-    (let [[name _ bytecode] (compile (sanitize {} (list 'lambda () form)))]
-      (.defineClass *class-loader* name bytecode form)
-      (.. (Class/forName name true *class-loader*) newInstance invoke))))
+    (eval* (sanitize @global-env form))))
