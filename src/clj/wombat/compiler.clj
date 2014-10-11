@@ -1,4 +1,4 @@
-(ns wombat.scheme2
+(ns wombat.compiler
   (:require [clojure.core.match :refer [match]])
   (:import [org.objectweb.asm ClassWriter ClassVisitor Opcodes Type Handle]
            [org.objectweb.asm.commons GeneratorAdapter Method]
@@ -265,7 +265,7 @@
     (let [fv (vec (free-vars lambda))
           cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
           lname (str "lambda_" (next-id))
-          fqname (str "wombat/scheme2/" lname)
+          fqname (str "wombat/" lname)
           _ (println "fqname:" fqname)
           dotname (.replace fqname "/" ".")
           ifaces (into-array String ["wombat/ILambda"])
