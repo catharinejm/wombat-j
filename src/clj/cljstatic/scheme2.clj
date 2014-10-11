@@ -53,7 +53,7 @@
    (match (seq form)
      nil form
      
-     (['quote val] :seq) val
+     (['quote val] :seq) (list 'quote val)
 
      (['lambda params & body] :seq)
      (let [lambda-env (extend-env env params)]
@@ -137,10 +137,10 @@
 (defn gen-closure-fields
   [^ClassVisitor cv closed-overs]
   (doseq [c closed-overs]
-    (. cv visitField (+ Opcodes/ACC_FINAL ) (close-name c) (.getDescriptor object-type) nil nil)))
+    (. cv visitField Opcodes/ACC_FINAL (close-name c) (.getDescriptor object-type) nil nil)))
 
 (defn gen-ctor
-  [cw fv]
+  [cw fqname fv]
   (let [ctor (Method. "<init>" Type/VOID_TYPE (into-array Type (repeat (count fv) object-type)))
         gen (GeneratorAdapter. Opcodes/ACC_PUBLIC ctor nil nil cw)]
     (. gen visitCode)
@@ -149,7 +149,7 @@
     (dotimes [n (count fv)]
       (. gen loadThis)
       (. gen loadArg n)
-      (. gen putField (close-name (nth fv n)) object-type))
+      (. gen putField (Type/getObjectType fqname) (close-name (nth fv n)) object-type))
     (. gen returnValue)
     (. gen endMethod)))
 
@@ -169,34 +169,55 @@
     (. gen returnValue)
     (. gen endMethod)))
 
+(defn emit-array
+  [gen asm-type contents]
+  (AsmUtil/pushInt gen (count contents))
+  (. gen newArray asm-type)
+  (dotimes [n (count contents)]
+    (. gen dup)
+    (AsmUtil/pushInt gen n)
+    (if (fn? (nth contents n))
+      ((nth contents n))
+      (. gen push (nth contents n)))
+    (. gen arrayStore asm-type)))
+
 (defn method-type
   [gen arity]
   (. gen push object-type)
-  (. gen push (count arity))
-  (. gen newArray (asmtype Class))
-  (dotimes [n (count arity)]
-    (. gen dup)
-    (. gen push n)
-    (. gen push object-type)
-    (. gen arrayStore))
+  (emit-array gen (asmtype Class) (repeat arity object-type))
   (. gen invokeStatic (asmtype MethodType) (Method/getMethod "java.lang.invoke.MethodType methodType(Class,Class[])")))
 
 (defn gen-handle
   [cw fqname arity]
   (let [^ClassVisitor cv cw]
-    (. cv visitField (+ Opcodes/ACC_STATIC Opcodes/ACC_FINAL) (handle-name arity) nil nil nil))
+    (. cv visitField (+ Opcodes/ACC_STATIC Opcodes/ACC_FINAL) (handle-name arity)
+       (.getDescriptor (asmtype MethodHandle)) nil nil))
 
   (let [clinitgen (GeneratorAdapter. (+ Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)
                                      (Method/getMethod "void <clinit>()")
-                                     nil nil cw)]
+                                     nil nil cw)
+        mt-local (. clinitgen newLocal (asmtype MethodType))]
     (. clinitgen visitCode)
+    (method-type clinitgen arity)
+    (. clinitgen storeLocal mt-local)
+
     (. clinitgen invokeStatic (asmtype MethodHandles) (Method/getMethod "java.lang.invoke.MethodHandles$Lookup lookup()"))
     (. clinitgen push (Type/getObjectType fqname))
     (. clinitgen push "invoke")
-    (method-type clinitgen arity)
+    (. clinitgen loadLocal mt-local)
     (. clinitgen invokeVirtual (asmtype MethodHandles$Lookup)
        (Method/getMethod "java.lang.invoke.MethodHandle findVirtual(Class,String,java.lang.invoke.MethodType)"))
-    (. clinitgen putField (handle-name arity) (asmtype MethodHandle))
+
+    (. clinitgen loadLocal mt-local)
+    (AsmUtil/pushInt clinitgen 0)
+    (emit-array clinitgen (asmtype Class) [ilambda-type])
+    (. clinitgen invokeVirtual (asmtype MethodType)
+       (Method/getMethod "java.lang.invoke.MethodType insertParameterTypes(int,Class[])"))
+
+    (. clinitgen invokeVirtual (asmtype MethodHandle)
+     (Method/getMethod "java.lang.invoke.MethodHandle asType(java.lang.invoke.MethodType)"))
+    (. clinitgen putStatic (Type/getObjectType fqname) (handle-name arity) (asmtype MethodHandle))
+
     (. clinitgen returnValue)
     (. clinitgen endMethod))
 
@@ -205,9 +226,11 @@
         false-label (. gen newLabel)
         end-label (. gen newLabel)]
     (. gen visitCode)
+    (. gen loadArg 0)
+    (AsmUtil/pushInt gen arity)
     (. gen ifCmp Type/INT_TYPE GeneratorAdapter/NE false-label)
 
-    (. gen getField (Type/getObjectType fqname) (handle-name arity) (asmtype MethodHandle))
+    (. gen getStatic (Type/getObjectType fqname) (handle-name arity) (asmtype MethodHandle))
     (. gen goTo end-label)
     
     (. gen mark false-label)
@@ -220,7 +243,7 @@
     (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "StringBuilder append(String)"))
     (. gen loadArg 0)
     (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "StringBuilder append(int)"))
-    (. gen push (str " for " (count arity) ")"))
+    (. gen push (str " for " arity ")"))
     (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "StringBuilder append(String)"))
     (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "String toString()"))
     (. gen invokeConstructor (asmtype IllegalArgumentException) (Method/getMethod "void <init>(String)"))
@@ -230,27 +253,30 @@
     (. gen returnValue)
     (. gen endMethod)))
 
+(def ^:dynamic *compiled-lambdas*)
 (defn compile
   "Compiles a given sanitized lambda form. If the input is not already
   sanitized, the results are undefined!
 
   Returns a vector of [<class name>, <closed-overs>, <bytecode>]"
   [[_ params & body :as lambda]]
-  (println "Compiling:" lambda)
-  (let [fv (vec (free-vars lambda))
-        cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
-        lname (str "lambda_" (next-id))
-        fqname (str "cljstatic/scheme2/" lname)
-        _ (println "fqname:" fqname)
-        dotname (.replace fqname "/" ".")
-        ifaces (make-array String 0)
-        env {:params params, :closed-overs fv, :locals {}}]
-    (. cw visit Opcodes/V1_7 Opcodes/ACC_PUBLIC fqname nil "java/lang/Object" ifaces)
-    (gen-closure-fields cw fv)
-    (gen-ctor cw fv)
-    (gen-body cw env body)
-    (gen-handle cw fqname (count params))
-    [dotname fv (.toByteArray cw)]))
+  (when-not (get @*compiled-lambdas* lambda)
+    (println "Compiling:" lambda)
+    (let [fv (vec (free-vars lambda))
+          cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
+          lname (str "lambda_" (next-id))
+          fqname (str "cljstatic/scheme2/" lname)
+          _ (println "fqname:" fqname)
+          dotname (.replace fqname "/" ".")
+          ifaces (into-array String ["cljstatic/ILambda"])
+          env {:params params, :closed-overs fv, :locals {} :thistype (Type/getObjectType fqname)}]
+      (. cw visit Opcodes/V1_7 Opcodes/ACC_PUBLIC fqname nil "java/lang/Object" ifaces)
+      (gen-closure-fields cw fv)
+      (gen-ctor cw fqname fv)
+      (gen-body cw env body)
+      (gen-handle cw fqname (count params))
+      (swap! *compiled-lambdas* conj lambda)
+      [dotname fv (.toByteArray cw)])))
 
 (defn emit
   [env context gen form]
@@ -265,7 +291,7 @@
    (emit-value context gen form)))
 
 (defn emit-symbol
-  [{:keys [params closed-overs locals] :as env} context gen sym]
+  [{:keys [params closed-overs locals thistype] :as env} context gen sym]
   (cond
    ((set params) sym)
    (. gen loadArg (.indexOf params sym))
@@ -273,7 +299,7 @@
    ((set closed-overs) sym)
    (do
      (. gen loadThis)
-     (. gen getField object-type (close-name sym) object-type))
+     (. gen getField thistype (close-name sym) object-type))
 
    ((set (keys locals)) sym)
    (. gen loadLocal (get locals sym))
@@ -354,13 +380,7 @@
 (defmethod emit-dup clojure.lang.Seqable
   [gen ^clojure.lang.Seqable lis]
   (println "emit-dup list" lis)
-  (. gen push (count lis))
-  (. gen newArray object-type)
-  (dotimes [n (count lis)]
-    (. gen dup)
-    (AsmUtil/pushInt gen n)
-    (emit-value :context/expression gen (nth lis n))
-    (. gen arrayStore object-type))
+  (emit-array gen object-type (map #(fn [] (emit-value :context/expression gen %)) lis))
   (. gen invokeStatic (asmtype java.util.Arrays) (Method/getMethod "java.util.List asList(Object[])"))
   (. gen invokeStatic (asmtype clojure.lang.PersistentList) (Method/getMethod "clojure.lang.IPersistentList create(java.util.List)")))
 
@@ -432,23 +452,45 @@
     (emit env context gen else)
     (. gen mark end-label)))
 
+(defn asm-println
+  "Generates bytecode to print the toString of whatever is on top of
+  the stack. Leaves stack unchaged."
+  [gen]
+  (. gen dup)
+  (. gen invokeVirtual object-type (Method/getMethod "String toString()"))
+  (. gen push "DEBUG: ")
+  (. gen swap)
+  (. gen invokeVirtual (asmtype String) (Method/getMethod "String concat(String)"))
+  (. gen push "clojure.core")
+  (. gen push "*out*")
+  (. gen invokeStatic (asmtype RT) (Method/getMethod "clojure.lang.Var var(String,String)"))
+  (. gen invokeVirtual (asmtype clojure.lang.Var) (Method/getMethod "Object deref()"))
+  (. gen checkCast (asmtype java.io.PrintWriter))
+  (. gen swap)
+  (. gen invokeVirtual (asmtype java.io.PrintWriter) (Method/getMethod "void println(String)")))
+
 (defmethod emit-seq -invoke-
   [env context gen [fun & args :as call]]
   (println "emitting invoke:" call)
   (println "context:" context)
+
   (emit env :context/expression gen fun)
+  (. gen dup)
   (. gen checkCast ilambda-type)
   (AsmUtil/pushInt gen (count args))
   (. gen invokeInterface ilambda-type (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)"))
+  (. gen swap)
+
   (doseq [a args]
     (emit env :context/expression gen a))
-  (. gen invokeVirtual (asmtype MethodHandle) (Method. "invoke" object-type (into-array Type (repeat (count args) object-type))))
+  (. gen invokeVirtual (asmtype MethodHandle) (Method. "invoke" object-type (into-array Type (cons ilambda-type (repeat (count args) object-type)))))
   (when (= context :context/statement)
     (. gen pop)))
 
 
 (defn scheme-eval
   [form]
-  (let [[name _ bytecode] (compile (sanitize {} `(~'lambda () '~form)))]
-    (.defineClass *class-loader* name bytecode form)
-    (.. (Class/forName name true *class-loader*) newInstance invoke)))
+  (binding [*compiled-lambdas* (atom #{})]
+    (let [[name _ bytecode] (compile (sanitize {} (list 'lambda () form)))]
+      (.defineClass *class-loader* name bytecode form)
+      (.. (Class/forName name true *class-loader*) newInstance invoke))))
