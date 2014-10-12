@@ -2,13 +2,20 @@
   (:require [clojure.core.match :refer [match]])
   (:import [org.objectweb.asm ClassWriter ClassVisitor Opcodes Type Handle]
            [org.objectweb.asm.commons GeneratorAdapter Method]
-           [clojure.lang DynamicClassLoader Compiler RT]
+           [clojure.lang DynamicClassLoader Compiler RT LineNumberingPushbackReader]
            [java.lang.invoke MethodType MethodHandle MethodHandles MethodHandles$Lookup
             CallSite VolatileCallSite]
+           [java.io FileReader]
            [wombat ILambda AsmUtil Global])
   (:refer-clojure :exclude [compile]))
 
-(def ^:dynamic *class-loader* (DynamicClassLoader.))
+(def ^:dynamic *class-loader* (DynamicClassLoader. (RT/baseLoader)))
+
+(defn maybe-class
+  [cname]
+  (try
+    (Class/forName (name cname) true *class-loader*)
+    (catch ClassNotFoundException e)))
 
 (def object-array-class (class (object-array 0)))
 
@@ -28,7 +35,6 @@
   (when *print-debug*
     (apply println vals)))
 
-(def global-env (atom {}))
 (def global-bindings (atom {}))
 
 (def seqable?
@@ -56,15 +62,18 @@
 (defn substitute
   "Renames a plain symbol to its sanitized name in the given
   environment. IllegalArgumentException is thrown for symbols which
-  are not in the given environment. Specials which are not in the
-  environment map pass through unmodified.
+  are not in the given environment. Specials and class names which are
+  not in the environment map pass through unmodified.
 
   E.g. (substitute '{foo foo__#0} 'foo) ;=> foo__#0
-       (substitute '{foo foo__#0} 'lambda) ;=> lambda"
+       (substitute '{foo foo__#0} 'lambda) ;=> lambda
+       (substitute '{foo foo__#0} 'java.lang.Object ;=> java.lang.Object"
   [env sym]
   (if (symbol? sym)
     (or (get env sym)
         (get specials sym)
+        (and (contains? @global-bindings sym) sym)
+        (and (maybe-class sym) sym)
         (throw (IllegalArgumentException. (str "symbol " sym " is not defined"))))
     sym))
 
@@ -98,9 +107,7 @@
        (list* 'let (map list bind-syms sani-binds) (map (partial sanitize let-env) body)))
 
      (['define name & val] :seq)
-     (let [sani-name (get @global-env name (sanitize-name name))]
-       (swap! global-env assoc name sani-name)
-       (list* 'define sani-name (map (partial sanitize (assoc env name sani-name)) val)))
+     (list* 'define name (map (partial sanitize env) val))
 
      :else
      (map (partial sanitize env) form))
@@ -130,10 +137,16 @@
             (reduce into (sorted-set) (map #(free-vars (second %)) bindings))
             (map first bindings))
 
+     (['define name & val] :seq)
+     (disj (free-vars val) name)
+
      :else
      (reduce into (sorted-set) (map free-vars form)))
 
-   (and (symbol? form) (not (contains? specials form)))
+   (and (symbol? form)
+        (not (contains? specials form))
+        (not (contains? @global-bindings form))
+        (not (maybe-class form)))
    (sorted-set form)
 
    :else
@@ -156,11 +169,11 @@
 
 (defn close-name
   [fsym]
-  (str "close_" (munge (name fsym))))
+  (str "close_" (.replace (munge (name fsym)) "." "_DOT_")))
 
 (defn local-name
   [lsym]
-  (str "local_" (munge (name lsym))))
+  (str "local_" (.replace (munge (name lsym)) "." "_DOT_")))
 
 (defn handle-name
   [arity restarg]
@@ -331,7 +344,7 @@
   (when-not (get @*compiled-lambdas* lambda)
     (validate-params! params)
     (debug "Compiling:" lambda)
-    (let [fv (vec (apply disj (free-vars lambda) (vals @global-env)))
+    (let [fv (vec (free-vars lambda))
           cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
           lname (str "lambda_" (next-id))
           fqname (str "wombat/" lname)
@@ -356,8 +369,11 @@
 (defn emit
   [env context gen form]
   (cond
-   (seqable? form)
+   (and (seqable? form) (seq form))
    (emit-seq env context gen form)
+
+   (seqable? form) ; empty
+   (emit-value context gen form)
 
    (symbol? form)
    (emit-symbol env context gen form)
@@ -395,6 +411,9 @@
 
    (contains? @global-bindings sym)
    (emit-global gen sym)
+   
+   (maybe-class sym)
+   (. gen push (asmtype (maybe-class sym)))
 
    :else
    (throw (IllegalStateException. (str "Symbol " sym " is not defined"))))
@@ -425,6 +444,11 @@
 (defmethod emit-dup :default
   [_ obj]
   (throw (IllegalArgumentException. (str "cannot emit-dup of " obj))))
+
+(defmethod emit-dup Class
+  [gen ^Class class]
+  (debug "emit-dup class" class)
+  (. gen push (asmtype class)))
 
 (defmethod emit-dup Integer
   [gen ^Integer int]
@@ -584,6 +608,8 @@
 
 (defmethod emit-seq -invoke-
   [env context gen [fun & args :as call]]
+  (when (nil? fun)
+    (throw (IllegalArgumentException. "Can't invoke nil")))
   (debug "emitting invoke:" call)
   (debug "context:" context)
 
@@ -625,7 +651,7 @@
   "Top-level eval call. Initializes env and sanitizes input."
   [form]
   (binding [*compiled-lambdas* (atom #{})]
-    (eval* (sanitize @global-env form))))
+    (eval* (sanitize {} form))))
 
 (defn load-file
   [file]
