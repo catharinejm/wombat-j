@@ -626,3 +626,16 @@
   [form]
   (binding [*compiled-lambdas* (atom #{})]
     (eval* (sanitize @global-env form))))
+
+(defn load-file
+  [file]
+  (binding [*print-debug* false
+            *class-loader* (DynamicClassLoader. *class-loader*)]
+    (let [file-reader (FileReader. file)
+          pb-reader (LineNumberingPushbackReader. file-reader)
+          eof (Object.)]
+      (loop []
+        (let [f (read pb-reader false eof)]
+          (when-not (identical? f eof)
+            (scheme-eval f)
+            (recur)))))))
