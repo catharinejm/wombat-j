@@ -19,17 +19,6 @@
 
 (def object-array-class (class (object-array 0)))
 
-;; (dotimes [n 21]
-;;   (eval `(gen-interface :name ~(symbol (str "wombat.ILambda" n))
-;;                         :extends [~'wombat.ILambda]
-;;                         :methods [[~'invoke [~@(repeat n Object)] ~'Object]]))
-;;   (eval `(import ~(symbol (str "wombat.ILambda" n)))))
-
-;; (eval
-;;  `(gen-interface :name ~'wombat.ILambda21
-;;                  :extends [~'wombat.ILambda]
-;;                  :methods [[~'invoke [~@(repeat 20 Object) ~(.getName object-array-class)] ~'Object]]))
-
 (def ^:dynamic *print-debug* true)
 (defn debug [& vals]
   (when *print-debug*
@@ -598,14 +587,6 @@
   (. gen swap)
   (. gen invokeVirtual (asmtype java.io.PrintWriter) (Method/getMethod "void println(String)")))
 
-;; (def invoke-handle
-;;   (Handle. Opcodes/H_INVOKESTATIC
-;;            "wombat/Global"
-;;            "bootstrapInvoke"
-;;            (.toMethodDescriptorString
-;;             (MethodType/methodType CallSite
-;;                                    (into-array Class [MethodHandles$Lookup String MethodType String])))))
-
 (defmethod emit-seq -invoke-
   [env context gen [fun & args :as call]]
   (when (nil? fun)
@@ -613,18 +594,8 @@
   (debug "emitting invoke:" call)
   (debug "context:" context)
 
-  ;; (let [cname (str "wombat.ILambda" (min (count args) 21))
-  ;;       arg-types (concat (repeat (min (count args) 20) Object)
-  ;;                         (when (> (count args) 20) (list object-array-class)))
-  ;;       invoke-descriptor (.toMethodDescriptorString
-  ;;                          (MethodType/methodType Object (into-array Class (cons ILambda arg-types))))]
-  ;;   (debug "cname:" cname)
-  ;;   (debug "argtypes:" arg-types)
-  ;;   (debug "invoke-descriptor:" invoke-descriptor))
-  
   (emit env :context/expression gen fun)
 
-  ;; Old-style getHandle
   (. gen dup)
   (. gen checkCast ilambda-type)
   (AsmUtil/pushInt gen (count args))
@@ -633,7 +604,6 @@
 
   (doseq [a args]
     (emit env :context/expression gen a))
-  ;; (. gen invokeDynamic "invoke" invoke-descriptor invoke-handle (into-array Object [cname]))
   (. gen invokeVirtual (asmtype MethodHandle)
      (Method. "invoke" object-type (into-array Type (cons ilambda-type (repeat (count args) object-type)))))
 
