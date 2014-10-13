@@ -4,7 +4,7 @@
 (defn print-exception
   [^Exception e]
   (binding [*out* *err*]
-    (println (.getMessage e))))
+    (println (str (.getName (class e)) ": " (.getMessage e)))))
 
 (defonce -bad-input- (Object.))
 
@@ -16,7 +16,7 @@
         (printf "wombat> ")
         (.flush *out*)
         (let [f (try (read)
-                     (catch Exception e
+                     (catch Throwable e
                        (reset! last-err e)
                        (print-exception e)
                        -bad-input-))]
@@ -41,7 +41,7 @@
              (try
                (println (scheme-eval f))
                (.flush *out*)
-               (catch Exception e
+               (catch Throwable e
                  (reset! last-err e)
                  (print-exception e)))
              (recur))

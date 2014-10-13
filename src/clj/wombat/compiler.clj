@@ -2,7 +2,7 @@
   (:require [clojure.core.match :refer [match]])
   (:import [org.objectweb.asm ClassWriter ClassVisitor Opcodes Type Handle]
            [org.objectweb.asm.commons GeneratorAdapter Method]
-           [clojure.lang DynamicClassLoader Compiler RT LineNumberingPushbackReader]
+           [clojure.lang DynamicClassLoader Compiler RT LineNumberingPushbackReader Keyword Symbol]
            [java.lang.invoke MethodType MethodHandle MethodHandles MethodHandles$Lookup
             CallSite VolatileCallSite]
            [java.io FileReader]
@@ -66,40 +66,57 @@
         (throw (IllegalArgumentException. (str "symbol " sym " is not defined"))))
     sym))
 
+(declare sanitize)
+
+(defn sanitize-lambda
+  [env [_ params & body :as form]]
+  (let [params (if (symbol? params) (list :!rest params) params)
+        lambda-env (extend-env env params)]
+    (list* 'lambda (map (partial substitute lambda-env) params) (map (partial sanitize lambda-env) body))))
+
+(defn sanitize-let
+  [env [_ bindings & body :as form]]
+  (let [sani-binds (map (partial sanitize env) (map second bindings))
+                                        ; Scheme-style let does not extend env with new
+                                        ; names until after bindings are evaluated
+        [let-env bind-syms] (loop [e env, sani-bs [], bs (map first bindings)]
+                              (if (seq bs)
+                                (let [sani (sanitize-name (first bs))]
+                                  (recur (assoc env (first bs) sani)
+                                         (conj sani-bs sani)
+                                         (rest bs)))
+                                [e sani-bs]))]
+    (list* 'let (map list bind-syms sani-binds) (map (partial sanitize let-env) body))))
+
+(defn sanitize-seq
+  [env form]
+  (match (seq form)
+    nil form
+    
+    (['quote val] :seq) (list 'quote val)
+
+    (['lambda params & body] :seq)
+    (sanitize-lambda env form)
+
+    (['let bindings & body] :seq)
+    (sanitize-let env form)
+
+    (['define name & val] :seq)
+    (list* 'define name (map (partial sanitize env) val))
+
+    (['define-class & rest] :seq)
+    form
+
+    :else
+    (map (partial sanitize env) form)))
+
 (defn sanitize
   "Renames all bound symbols within the given form to guarantee
   uniqueness."
   [env form]
   (cond
    (seqable? form)
-   (match (seq form)
-     nil form
-     
-     (['quote val] :seq) (list 'quote val)
-
-     (['lambda params & body] :seq)
-     (let [params (if (symbol? params) (list :!rest params) params)
-           lambda-env (extend-env env params)]
-       (list* 'lambda (map (partial substitute lambda-env) params) (map (partial sanitize lambda-env) body)))
-
-     (['let bindings & body] :seq)
-     (let [sani-binds (map (partial sanitize env) (map second bindings))
-                                        ; Scheme-style let does not extend env with new
-                                        ; names until after bindings are evaluated
-           [let-env bind-syms] (loop [e env, sani-bs [], bs (map first bindings)]
-                                 (if (seq bs)
-                                   (let [sani (sanitize-name (first bs))]
-                                     (recur (assoc env (first bs) sani)
-                                            (conj sani-bs sani)
-                                            (rest bs)))
-                                   [e sani-bs]))]
-       (list* 'let (map list bind-syms sani-binds) (map (partial sanitize let-env) body)))
-
-     (['define name & val] :seq)
-     (list* 'define name (map (partial sanitize env) val))
-
-     :else
-     (map (partial sanitize env) form))
+   (sanitize-seq env form)
 
    (symbol? form)
    (substitute env form)
@@ -109,7 +126,7 @@
 
 (defn free-vars
   "Returns a sorted-set of free symbols in the given form. Sorting is
-  arbitrary, but consitent."
+  arbitrary, but consistent."
   [form]
   (cond
    (seqable? form)
@@ -316,8 +333,6 @@
 
 (defn validate-params!
   [params]
-  (when (> (count params) 20)
-    (throw (IllegalArgumentException. "Lambdas with more than 20 params are not currently supported")))
   (when (> (count (drop-while (complement #{:!rest}) params)) 2)
     (throw (IllegalArgumentException. ":!rest may only be followed by one symbol!")))
   (when (seq (filter #(and (keyword? %) (not (#{:!rest} %))) params))
@@ -475,12 +490,12 @@
   (debug "emit-dup string" string)
   (. gen push string))
 
-(defmethod emit-dup clojure.lang.Symbol
-  [gen ^clojure.lang.Symbol sym]
+(defmethod emit-dup Symbol
+  [gen ^Symbol sym]
   (debug "emit-dup symbol" sym)
   (. gen push (namespace sym))
   (. gen push (name sym))
-  (. gen invokeStatic (asmtype clojure.lang.Symbol) (Method/getMethod "clojure.lang.Symbol intern(String,String)")))
+  (. gen invokeStatic (asmtype Symbol) (Method/getMethod "clojure.lang.Symbol intern(String,String)")))
 
 (defmethod emit-dup clojure.lang.Keyword
   [gen ^clojure.lang.Keyword kw]
@@ -587,6 +602,12 @@
   (. gen swap)
   (. gen invokeVirtual (asmtype java.io.PrintWriter) (Method/getMethod "void println(String)")))
 
+(defn emit-var
+  [gen sym]
+  (. gen push (namespace sym))
+  (. gen push (name sym))
+  (. gen invokeStatic (asmtype RT) (Method/getMethod "clojure.lang.Var var(String,String)")))
+
 (defmethod emit-seq -invoke-
   [env context gen [fun & args :as call]]
   (when (nil? fun)
@@ -594,18 +615,58 @@
   (debug "emitting invoke:" call)
   (debug "context:" context)
 
-  (emit env :context/expression gen fun)
+  (if (keyword? fun)
+    (let [fn-sym (symbol (or (namespace fun) "clojure.core") (name fun))]
+      (when-not (resolve fn-sym)
+        (throw (IllegalArgumentException. (str "Unable to resolve clojure symbol " fn-sym))))
 
-  (. gen dup)
-  (. gen checkCast ilambda-type)
-  (AsmUtil/pushInt gen (count args))
-  (. gen invokeInterface ilambda-type (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)"))
-  (. gen swap)
+      (emit-var gen fn-sym)
+      (doseq [a args]
+        (emit env :context/expression gen a))
+      (. gen invokeVirtual (asmtype clojure.lang.Var) (Method. "invoke" object-type (into-array Type (repeat (count args) object-type)))))
+    (let [;;is-kw-label (. gen newLabel)
+          ;;end-label (. gen newLabel)
+          ]
+      (emit env :context/expression gen fun)
+      ;; (. gen dup)
+      ;; (. gen instanceOf (asmtype Keyword))
+      ;; (. gen ifZCmp GeneratorAdapter/NE is-kw-label)
 
-  (doseq [a args]
-    (emit env :context/expression gen a))
-  (. gen invokeVirtual (asmtype MethodHandle)
-     (Method. "invoke" object-type (into-array Type (cons ilambda-type (repeat (count args) object-type)))))
+      ;; Not keword
+      (. gen dup)
+      (. gen checkCast ilambda-type)
+      (AsmUtil/pushInt gen (count args))
+      (. gen invokeInterface ilambda-type (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)"))
+      (. gen swap)
+
+      (doseq [a args]
+        (emit env :context/expression gen a))
+      (. gen invokeVirtual (asmtype MethodHandle)
+         (Method. "invoke" object-type (into-array Type (cons ilambda-type (repeat (count args) object-type)))))
+      ;; (. gen goTo end-label)
+
+      ;; Is keyword
+      ;; (. gen mark is-kw-label)
+      ;; (. gen checkCast (asmtype Keyword))
+      ;; (. gen getField (asmtype Keyword) "sym" (asmtype Symbol))
+      ;; (. gen dup)
+      ;; (. gen invokeVirtual (asmtype Symbol) (Method/getMethod "String getNamespace()"))
+      ;; (let [has-ns (. gen newLabel)]
+      ;;   (. gen dup)
+      ;;   (. gen ifNonNull has-ns)
+      ;;   (. gen pop) ;; pop initial null ns from before dup
+      ;;   (. gen push "clojure.core")
+      ;;   (. gen mark has-ns))
+      ;; (. gen swap)
+      ;; (. gen invokeVirtual (asmtype Symbol) (Method/getMethod "String getName()"))
+      ;; (. gen invokeStatic (asmtype RT) (Method/getMethod "clojure.lang.Var var(String,String)"))
+      ;; (doseq [a args]
+      ;;   (emit env :context/expression gen a))
+      ;; (. gen invokeVirtual (asmtype clojure.lang.Var)
+      ;;    (Method. "invoke" object-type (into-array Type (repeat (count args) object-type))))
+
+      ;; (. gen mark end-label)
+      ))
 
   (when (= context :context/statement)
     (. gen pop)))
@@ -635,3 +696,5 @@
           (when-not (identical? f eof)
             (scheme-eval f)
             (recur)))))))
+
+(load "compiler_defclass")
