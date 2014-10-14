@@ -1,5 +1,6 @@
 (ns wombat.compiler
-  (:require [clojure.core.match :refer [match]])
+  (:require [clojure.core.match :refer [match]]
+            wombat.empty)
   (:import [org.objectweb.asm ClassWriter ClassVisitor Opcodes Type Handle]
            [org.objectweb.asm.commons GeneratorAdapter Method]
            [clojure.lang DynamicClassLoader Compiler RT LineNumberingPushbackReader Keyword Symbol]
@@ -7,15 +8,16 @@
             CallSite VolatileCallSite]
            [java.io FileReader]
            [wombat ILambda AsmUtil Global])
-  (:refer-clojure :exclude [compile]))
+  (:refer-clojure :exclude [compile load-file]))
 
 (def ^:dynamic *class-loader* (DynamicClassLoader. (RT/baseLoader)))
 
+(def clean-resolve (partial ns-resolve 'wombat.empty))
+
 (defn maybe-class
   [cname]
-  (try
-    (Class/forName (name cname) true *class-loader*)
-    (catch ClassNotFoundException e)))
+  (when-let [cls (clean-resolve cname)]
+    (when (class? cls) cls)))
 
 (def object-array-class (class (object-array 0)))
 
@@ -88,6 +90,8 @@
                                 [e sani-bs]))]
     (list* 'let (map list bind-syms sani-binds) (map (partial sanitize let-env) body))))
 
+(declare sanitize-jvm)
+
 (defn sanitize-seq
   [env form]
   (match (seq form)
@@ -104,8 +108,11 @@
     (['define name & val] :seq)
     (list* 'define name (map (partial sanitize env) val))
 
-    (['define-class & rest] :seq)
-    form
+    ;; (['define-class & rest] :seq)
+    ;; form
+
+    ([:jvm & insns] :seq)
+    (list* :jvm (map (partial sanitize-jvm env) insns))
 
     :else
     (map (partial sanitize env) form)))
@@ -145,6 +152,12 @@
 
      (['define name & val] :seq)
      (disj (free-vars val) name)
+
+     ([:jvm & forms] :seq)
+     (into (sorted-set)
+           (mapcat #(when (keyword? (first %))
+                      (free-vars (rest %)))
+                   forms))
 
      :else
      (reduce into (sorted-set) (map free-vars form)))
@@ -607,6 +620,12 @@
   (. gen push (namespace sym))
   (. gen push (name sym))
   (. gen invokeStatic (asmtype RT) (Method/getMethod "clojure.lang.Var var(String,String)")))
+
+(declare emit-jvm)
+(defmethod emit-seq :jvm
+  [env context gen [_ & insns]]
+  (doseq [i insns]
+    (emit-jvm env context gen i)))
 
 (defmethod emit-seq -invoke-
   [env context gen [fun & args :as call]]
