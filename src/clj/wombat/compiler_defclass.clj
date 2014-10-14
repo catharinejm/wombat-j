@@ -9,13 +9,17 @@
 (defn assert-arity!
   [form arity]
   (when-not (= (count form) (inc arity))
-    (throw (IllegalArgumentException. (str (first form) " directive takes exactly " arity " argument" (if (= 1 arity) "." "s.")
-                                           " Extras: " (drop (inc arity) form))))))
+    (throw (IllegalArgumentException. (str (first form) " directive takes exactly " arity " argument" (if (= 1 arity) "." "s."))))))
 
 (defn assert-min-arity!
   [form min-arity]
   (when-not (>= (count form) (inc min-arity))
-    (throw (IllegalArgumentException. (str (first form) " directeive takes at least " min-arity " argument" (if (= 1 min-arity) "." "s."))))))
+    (throw (IllegalArgumentException. (str (first form) " directive takes at least " min-arity " argument" (if (= 1 min-arity) "." "s."))))))
+
+(defn assert-range-arity!
+  [form min-arity max-arity]
+  (when-not (<= (inc min-arity) (count form) (inc max-arity))
+    (throw (IllegalArgumentException. (str (first form) " directive takes " min-arity " to " max-arity " arguments.")))))
 
 (defonce -emit-jvm-default- (Object.))
 (defmulti emit-jvm
@@ -99,3 +103,16 @@
   [env context gen [_ type :as form]]
   (assert-arity! form 1)
   (. gen box (resolve-asm type)))
+
+(defmethod emit-jvm 'push
+  [env context gen [_ type val :as form]]
+  (assert-arity! form 2)
+  (condp #(%1 %2) type
+    '#{int} (AsmUtil/pushInt gen val)
+    '#{long} (AsmUtil/pushLong gen val)
+    '#{float} (AsmUtil/pushFloat gen val)
+    '#{double} (AsmUtil/pushDouble gen val)
+    '#{boolean} (. gen push (.booleanValue val))
+    '#{Class java.lang.Class} (. gen push (asmtype val))
+    '#{String java.lang.String} (. gen push (cast String val))
+    (throw (IllegalArgumentException. (str "Cannot push type " type)))))
