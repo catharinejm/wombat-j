@@ -48,14 +48,14 @@
                (let [val (scheme-eval f)]
                  (println val)
                  (.flush *out*)
-                 (scheme-eval '(define *3 *2))
-                 (scheme-eval '(define *2 *1))
-                 (scheme-eval (list 'define '*1 val)))
+                 (binding [compiler/*print-debug* false]
+                   (scheme-eval '(define *3 *2))
+                   (scheme-eval '(define *2 *1))
+                   (compiler/set-global! '*1 val)))
                (catch Throwable e
                  (reset! last-err e)
-                 ;; Hack! No emit-dup for exceptions
-                 (.setTarget ^CallSite (@compiler/global-bindings '*e)
-                             (MethodHandles/constant Object e))
+                 (binding [compiler/*print-debug* false]
+                   (compiler/set-global! '*e e))
                  (print-exception e)))
              (recur))
 

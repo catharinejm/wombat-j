@@ -106,7 +106,7 @@
     (sanitize-let env form)
 
     (['define name & val] :seq)
-    (list* 'define name (map (partial sanitize env) val))
+    (list* 'define name (map (partial sanitize (assoc env name name)) val))
 
     ;; (['define-class & rest] :seq)
     ;; form
@@ -186,13 +186,17 @@
 (def ilambda-type (asmtype ILambda))
 (def void-ctor (Method/getMethod "void <init>()"))
 
+(defn dotmunge
+  [str]
+  (.replace (munge str) "." "_DOT_"))
+
 (defn close-name
   [fsym]
-  (str "close_" (.replace (munge (name fsym)) "." "_DOT_")))
+  (str "close_" (dotmunge (name fsym))))
 
 (defn local-name
   [lsym]
-  (str "local_" (.replace (munge (name lsym)) "." "_DOT_")))
+  (str "local_" (dotmunge (name lsym))))
 
 (defn handle-name
   [arity restarg]
@@ -403,14 +407,14 @@
            "wombat/Global"
            "bootstrap"
            (.toMethodDescriptorString
-            (MethodType/methodType CallSite (into-array Class [MethodHandles$Lookup String MethodType])))))
+            (MethodType/methodType CallSite (into-array Class [MethodHandles$Lookup String MethodType String])))))
 
 (defn emit-global
   [gen sym]
-  (. gen invokeDynamic (name sym)
+  (. gen invokeDynamic "getGlobal"
      (.toMethodDescriptorString (MethodType/methodType Object (make-array Class 0)))
      global-bootstrap
-     (make-array Object 0)))
+     (object-array [(name sym)])))
 
 (defn emit-symbol
   [{:keys [params closed-overs locals thistype] :as env} context gen sym]
@@ -506,15 +510,15 @@
 (defmethod emit-dup Symbol
   [gen ^Symbol sym]
   (debug "emit-dup symbol" sym)
-  (. gen push (namespace sym))
-  (. gen push (name sym))
+  (emit-value :context/expression gen (namespace sym))
+  (emit-value :context/expression gen (name sym))
   (. gen invokeStatic (asmtype Symbol) (Method/getMethod "clojure.lang.Symbol intern(String,String)")))
 
 (defmethod emit-dup clojure.lang.Keyword
   [gen ^clojure.lang.Keyword kw]
   (debug "emit-dup keyword" kw)
-  (. gen push (namespace kw))
-  (. gen push (name kw))
+  (emit-value :context/expression gen (namespace kw))
+  (emit-value :context/expression gen (name kw))
   (. gen invokeStatic (asmtype clojure.lang.Keyword) (Method/getMethod "clojure.lang.Keyword intern(String,String)")))
 
 (defmethod emit-dup clojure.lang.Seqable
@@ -543,6 +547,9 @@
         (. gen invokeConstructor (Type/getObjectType slashname)
            (Method. "<init>" Type/VOID_TYPE (into-array Type (repeat (count closed-overs) object-type))))))))
 
+;; (defmethod emit-seq 'define-class
+;;   [env context gen [_ fields :as defcls]])
+
 (defmethod emit-seq 'let
   [env context gen [_ bindings & body :as the-let]]
   (let [start-label (. gen newLabel)
@@ -567,14 +574,19 @@
   [env context gen [_ & exprs :as form]]
   (emit-body env context gen exprs))
 
+(defn set-global!
+  [sym value]
+  (cast Symbol sym)
+  (let [handle (MethodHandles/constant Object value)]
+    (if (contains? @global-bindings sym)
+      (.setTarget ^CallSite (@global-bindings sym) handle)
+      (swap! global-bindings assoc sym (VolatileCallSite. handle)))))
+
 (defmethod emit-seq 'define
   [env context gen [_ name val :as form]]
   (when (> (count form) 3)
     (throw (IllegalArgumentException. "define only takes one value")))
-  (let [handle (MethodHandles/constant Object (eval* val))]
-    (if (contains? @global-bindings name)
-      (.setTarget ^VolatileCallSite (@global-bindings name) handle)
-      (swap! global-bindings assoc name (VolatileCallSite. handle))))
+  (set-global! name (eval* val))
   (emit-global gen name))
 
 (defmethod emit-seq 'if
@@ -691,12 +703,20 @@
   (when (= context :context/statement)
     (. gen pop)))
 
+(defn compile-and-load
+  ^Class [form]
+  (debug "COMPILE-AND-LOAD: " form)
+  (let [[name _ bytecode] (compile form)]
+    (.defineClass *class-loader* name bytecode form)
+    (Class/forName name true *class-loader*)))
+
 (defn eval*
   "Low-level eval call. Requires a pre-sanitized input."
   [form]
-  (let [[name _ bytecode] (compile (list 'lambda () form))]
-    (.defineClass *class-loader* name bytecode form)
-    (.. (Class/forName name true *class-loader*) newInstance invoke)))
+  (debug "EVAL*: " form)
+  (when (and (seqable? form) (= (first form) 'define))
+    (set-global! (second form) nil))
+  (.. (compile-and-load (list 'lambda () form)) newInstance invoke))
 
 (defn scheme-eval
   "Top-level eval call. Initializes env and sanitizes input."

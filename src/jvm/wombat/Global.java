@@ -14,12 +14,12 @@ public class Global {
     final static Var COMPILER_BINDINGS = RT.var("wombat.compiler", "global-bindings");
     final static Var LOADER = RT.var("wombat.compiler", "*class-loader*");
     
-    public static CallSite bootstrap(MethodHandles.Lookup caller, String name, MethodType methodType) {
+    public static CallSite bootstrap(MethodHandles.Lookup caller, String name, MethodType methodType, String symName) {
         Atom bindAtom = (Atom) COMPILER_BINDINGS.deref();
         IPersistentMap bindings = (IPersistentMap) bindAtom.deref();
-        CallSite site = (CallSite) bindings.valAt(Symbol.intern(name));
+        CallSite site = (CallSite) bindings.valAt(Symbol.intern(symName));
         if (site == null)
-            throw new IllegalStateException("Symbol " + name + " is not defined!");
+            throw new IllegalStateException("Symbol " + symName + " is not defined!");
 
         return site;
     }

@@ -27,13 +27,13 @@
   :default -emit-jvm-default-)
 
 (defmethod emit-jvm -emit-jvm-default-
-  [_ _ _ insn]
-  (throw (IllegalArgumentException. (str "unrecognized jvm form: " insn))))
+  [env context gen insns]
+  (throw (IllegalArgumentException. (str "unrecognized jvm form: " insns))))
 
 (defmethod emit-jvm :emit
-  [env context gen [_ sym :as form]]
+  [env context gen [_ val :as form]]
   (assert-arity! form 1)
-  (emit-symbol env :context/expression gen sym))
+  (emit env :context/expression gen val))
 
 (defmethod emit-jvm :invoke
   [env context gen [_ fun & args :as form]]
@@ -43,7 +43,12 @@
 (defmethod emit-jvm 'checkCast
   [env context gen [_ class :as form]]
   (assert-arity! form 1)
-  (. gen checkCast (Type/getType (clean-resolve class))))
+  (. gen checkCast (asmtype (clean-resolve class))))
+
+(defmethod emit-jvm 'loadThis
+  [env context gen form]
+  (assert-arity! form 0)
+  (. gen loadThis))
 
 (defn maybe-prim-resolve
   [sym]
@@ -84,6 +89,23 @@
   [[ret name & params]]
   (Method. name (resolve-asm ret) (into-array Type (map resolve-asm params))))
 
+(defmethod emit-jvm :str
+  [env context gen [_ val :as form]]
+  (assert-arity! form 1)
+  (emit-symbol env :context/expression gen val)
+  (. gen invokeVirtual object-type (method '(String "toString"))))
+
+(defmethod emit-jvm :thistype
+  [{thistype :thistype} context gen form]
+  (assert-arity! form 0)
+  (. gen push thistype))
+
+(defmethod emit-jvm 'getField
+  [{thistype :thistype :as env} context gen [_ name type :as form]]
+  (assert-arity! form 2)
+  (. gen loadThis)
+  (. gen getField thistype name (resolve-asm type)))
+
 (defmethod emit-jvm 'invokeInterface
   [env context gen [_ owner sig :as form]]
   (assert-arity! form 2)
@@ -118,6 +140,6 @@
     '#{float} (AsmUtil/pushFloat gen val)
     '#{double} (AsmUtil/pushDouble gen val)
     '#{boolean} (. gen push (.booleanValue val))
-    '#{Class java.lang.Class} (. gen push (asmtype val))
+    '#{Class java.lang.Class} (. gen push (resolve-asm val))
     '#{String java.lang.String} (. gen push (cast String val))
     (throw (IllegalArgumentException. (str "Cannot push type " type)))))
