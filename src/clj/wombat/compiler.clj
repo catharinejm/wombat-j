@@ -569,7 +569,7 @@
 
 (defmethod emit-seq 'define
   [env context gen [_ name val :as form]]
-  (when (> 3 (count form))
+  (when (> (count form) 3)
     (throw (IllegalArgumentException. "define only takes one value")))
   (let [handle (MethodHandles/constant Object (eval* val))]
     (if (contains? @global-bindings name)
@@ -636,7 +636,8 @@
 
   (if (keyword? fun)
     (let [fn-sym (symbol (or (namespace fun) "clojure.core") (name fun))]
-      (when-not (resolve fn-sym)
+      (debug "keyword invoke: " fun)
+      (when-not (clean-resolve fn-sym)
         (throw (IllegalArgumentException. (str "Unable to resolve clojure symbol " fn-sym))))
 
       (emit-var gen fn-sym)

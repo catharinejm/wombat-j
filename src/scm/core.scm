@@ -1,3 +1,9 @@
+(define load-file
+  (lambda (file)
+    (:wombat.compiler/load-file file)))
+
+(define list (lambda elems elems))
+
 (define car
   (lambda (lis)
     (:clojure.core/first lis)))
@@ -8,10 +14,7 @@
 
 (define cons
   (lambda (a d)
-    (:clojure.core/cons a d)))
-
-(define next :clojure.core/next)
-(next '(1 2))
+    (:clojure.core/conj d a)))
 
 (define namespace
   (lambda (named)

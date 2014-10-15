@@ -104,6 +104,11 @@
   (assert-arity! form 1)
   (. gen box (resolve-asm type)))
 
+(defmethod emit-jvm 'unbox
+  [env context gen [_ type :as form]]
+  (assert-arity! form 1)
+  (. gen unbox (resolve-asm type)))
+
 (defmethod emit-jvm 'push
   [env context gen [_ type val :as form]]
   (assert-arity! form 2)
