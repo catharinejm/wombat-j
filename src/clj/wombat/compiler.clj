@@ -657,15 +657,8 @@
       (doseq [a args]
         (emit env :context/expression gen a))
       (. gen invokeVirtual (asmtype clojure.lang.Var) (Method. "invoke" object-type (into-array Type (repeat (count args) object-type)))))
-    (let [;;is-kw-label (. gen newLabel)
-          ;;end-label (. gen newLabel)
-          ]
+    (do
       (emit env :context/expression gen fun)
-      ;; (. gen dup)
-      ;; (. gen instanceOf (asmtype Keyword))
-      ;; (. gen ifZCmp GeneratorAdapter/NE is-kw-label)
-
-      ;; Not keword
       (. gen dup)
       (. gen checkCast ilambda-type)
       (AsmUtil/pushInt gen (count args))
@@ -675,31 +668,7 @@
       (doseq [a args]
         (emit env :context/expression gen a))
       (. gen invokeVirtual (asmtype MethodHandle)
-         (Method. "invoke" object-type (into-array Type (cons ilambda-type (repeat (count args) object-type)))))
-      ;; (. gen goTo end-label)
-
-      ;; Is keyword
-      ;; (. gen mark is-kw-label)
-      ;; (. gen checkCast (asmtype Keyword))
-      ;; (. gen getField (asmtype Keyword) "sym" (asmtype Symbol))
-      ;; (. gen dup)
-      ;; (. gen invokeVirtual (asmtype Symbol) (Method/getMethod "String getNamespace()"))
-      ;; (let [has-ns (. gen newLabel)]
-      ;;   (. gen dup)
-      ;;   (. gen ifNonNull has-ns)
-      ;;   (. gen pop) ;; pop initial null ns from before dup
-      ;;   (. gen push "clojure.core")
-      ;;   (. gen mark has-ns))
-      ;; (. gen swap)
-      ;; (. gen invokeVirtual (asmtype Symbol) (Method/getMethod "String getName()"))
-      ;; (. gen invokeStatic (asmtype RT) (Method/getMethod "clojure.lang.Var var(String,String)"))
-      ;; (doseq [a args]
-      ;;   (emit env :context/expression gen a))
-      ;; (. gen invokeVirtual (asmtype clojure.lang.Var)
-      ;;    (Method. "invoke" object-type (into-array Type (repeat (count args) object-type))))
-
-      ;; (. gen mark end-label)
-      ))
+         (Method. "invoke" object-type (into-array Type (cons ilambda-type (repeat (count args) object-type)))))))
 
   (when (= context :context/statement)
     (. gen pop)))
