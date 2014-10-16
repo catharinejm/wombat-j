@@ -580,7 +580,8 @@
   (let [handle (MethodHandles/constant Object value)]
     (if (contains? @global-bindings sym)
       (.setTarget ^CallSite (@global-bindings sym) handle)
-      (swap! global-bindings assoc sym (VolatileCallSite. handle)))))
+      (swap! global-bindings assoc sym (VolatileCallSite. handle))))
+  value)
 
 (defmethod emit-seq 'define
   [env context gen [_ name val :as form]]
@@ -714,9 +715,9 @@
   "Low-level eval call. Requires a pre-sanitized input."
   [form]
   (debug "EVAL*: " form)
-  (when (and (seqable? form) (= (first form) 'define))
-    (set-global! (second form) nil))
-  (.. (compile-and-load (list 'lambda () form)) newInstance invoke))
+  (if (and (seqable? form) (= (first form) 'define))
+    (set-global! (second form) (eval* (first (nnext form))))
+    (.. (compile-and-load (list 'lambda () form)) newInstance invoke)))
 
 (defn scheme-eval
   "Top-level eval call. Initializes env and sanitizes input."

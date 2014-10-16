@@ -124,7 +124,16 @@
 (defmethod emit-jvm 'box
   [env context gen [_ type :as form]]
   (assert-arity! form 1)
-  (. gen box (resolve-asm type)))
+  (if (= type 'boolean)
+    (let [false-label (. gen newLabel)
+          end-label (. gen newLabel)]
+      (. gen ifZCmp GeneratorAdapter/EQ false-label)
+      (. gen getStatic boolean-object-type "TRUE" boolean-object-type)
+      (. gen goTo end-label)
+      (. gen mark false-label)
+      (. gen getStatic boolean-object-type "FALSE" boolean-object-type)
+      (. gen mark end-label))
+    (. gen box (resolve-asm type))))
 
 (defmethod emit-jvm 'unbox
   [env context gen [_ type :as form]]

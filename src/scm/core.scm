@@ -106,10 +106,8 @@
                  (let ((gs (gensym)))
                    (list 'lambda (list gs)
                          (cons 'list fields) ;; capture in closure
-                         (foldl (lambda (f coll)
+                         (foldr (lambda (f coll)
                                   (cons 'if (cons (list 'eqv? (list 'quote f) gs)
-                                                  (list (list :jvm
-                                                              (list 'getField (:wombat.compiler/close-name f) 'Object))
-                                                        coll))))
-                                '()  fields))))))
+                                                  (list f coll))))
+                                nil fields))))))
     nil))
