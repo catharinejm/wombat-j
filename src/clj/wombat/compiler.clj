@@ -39,7 +39,7 @@
   (swap! -id- inc'))
 
 (def specials
-  '#{lambda let if define quote begin})
+  '#{lambda let if define define-class* quote begin})
 
 (defn sanitize-name
   [sym]
@@ -108,8 +108,8 @@
     (['define name & val] :seq)
     (list* 'define name (map (partial sanitize (assoc env name name)) val))
 
-    ;; (['define-class & rest] :seq)
-    ;; form
+    (['define-class* & rest] :seq)
+    form
 
     ([:jvm & insns] :seq)
     (list* :jvm (map (partial sanitize-jvm env) insns))
@@ -152,6 +152,11 @@
 
      (['define name & val] :seq)
      (disj (free-vars val) name)
+
+     ;; define-class* is not a closure, leave free vars uncollected
+     ;; so they will throw during compilation
+     (['define-class* & rest] :seq)
+     (sorted-set)
 
      ([:jvm & forms] :seq)
      (into (sorted-set)
@@ -356,11 +361,19 @@
     (throw (IllegalArgumentException. "Only :!rest keyword supported in params"))))
 
 (def ^:dynamic *compiled-lambdas*)
-(defn compile
-  "Compiles a given sanitized lambda form. If the input is not already
-  sanitized, the results are undefined!
 
-  Returns a vector of [<class name>, <closed-overs>, <bytecode>]"
+(defmulti compile
+  "Compiles a given lambda or define-class*. Lambda input must be
+  sanitized, or the results are undefined!
+
+  Returns a vector of [<class name> <bytecode> <closed-overs>?]
+
+  Note that because define-class* is not a closure, there will be no
+  <closed-overs>"
+
+  first)
+
+(defmethod compile 'lambda
   [[_ params & body :as lambda]]
   (when-not (get @*compiled-lambdas* lambda)
     (validate-params! params)
@@ -384,8 +397,9 @@
       (gen-ctor cw fqname fv)
       (gen-body cw env body)
       (gen-handle cw env)
+      (. cw visitEnd)
       (swap! *compiled-lambdas* conj lambda)
-      [dotname fv (.toByteArray cw)])))
+      [dotname (.toByteArray cw) fv])))
 
 (defn emit
   [env context gen form]
@@ -537,7 +551,7 @@
 (defmethod emit-seq 'lambda
   [env context gen [_ params & body :as lambda]]
   (when-not (= context :context/statement)
-    (let [[dotname closed-overs bytecode] (compile lambda)]
+    (let [[dotname bytecode closed-overs] (compile lambda)]
       (. *class-loader* defineClass dotname bytecode lambda)
       (let [slashname (.replace dotname "." "/")]
         (. gen newInstance (Type/getObjectType slashname))
@@ -547,7 +561,7 @@
         (. gen invokeConstructor (Type/getObjectType slashname)
            (Method. "<init>" Type/VOID_TYPE (into-array Type (repeat (count closed-overs) object-type))))))))
 
-;; (defmethod emit-seq 'define-class
+;; (defmethod emit-seq 'define-class*
 ;;   [env context gen [_ fields :as defcls]])
 
 (defmethod emit-seq 'let
@@ -676,7 +690,7 @@
 (defn compile-and-load
   ^Class [form]
   (debug "COMPILE-AND-LOAD: " form)
-  (let [[name _ bytecode] (compile form)]
+  (let [[name bytecode] (compile form)]
     (.defineClass *class-loader* name bytecode form)
     (Class/forName name true *class-loader*)))
 
@@ -684,9 +698,15 @@
   "Low-level eval call. Requires a pre-sanitized input."
   [form]
   (debug "EVAL*: " form)
-  (if (and (seqable? form) (= (first form) 'define))
-    (set-global! (second form) (eval* (first (nnext form))))
-    (.. (compile-and-load (list 'lambda () form)) newInstance invoke)))
+  (cond
+   (and (seqable? form) (= (first form) 'define))
+   (set-global! (second form) (eval* (first (nnext form))))
+
+   (and (seqable? form) (= (first form) 'define-class*))
+   (set-global! (second form) (compile-and-load form))
+
+   :else
+   (.. (compile-and-load (list 'lambda () form)) newInstance invoke)))
 
 (defn scheme-eval
   "Top-level eval call. Initializes env and sanitizes input."

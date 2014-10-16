@@ -52,38 +52,31 @@
 
 (defn maybe-prim-resolve
   [sym]
-  (condp = sym
-    'int Integer/TYPE
-    'ints (class (int-array 0))
-    'long Long/TYPE
-    'longs (class (long-array 0))
-    'float Float/TYPE
-    'floats (class (float-array 0))
-    'double Double/TYPE
-    'doubles (class (double-array 0))
-    'short Short/TYPE
-    'shorts (class (short-array 0))
-    'char Character/TYPE
-    'chars (class (char-array 0))
-    'byte Byte/TYPE
-    'bytes (class (byte-array 0))
-    'boolean Boolean/TYPE
-    'booleans (class (boolean-array 0))
-    'void Void/TYPE
-    (clean-resolve sym)))
+  (if (and (seqable? cls) (= (count cls) 1))
+    (class (make-array (maybe-prim-resolve (first cls)) 0))
+    (condp = sym
+      'int Integer/TYPE
+      'ints (class (int-array 0))
+      'long Long/TYPE
+      'longs (class (long-array 0))
+      'float Float/TYPE
+      'floats (class (float-array 0))
+      'double Double/TYPE
+      'doubles (class (double-array 0))
+      'short Short/TYPE
+      'shorts (class (short-array 0))
+      'char Character/TYPE
+      'chars (class (char-array 0))
+      'byte Byte/TYPE
+      'bytes (class (byte-array 0))
+      'boolean Boolean/TYPE
+      'booleans (class (boolean-array 0))
+      'void Void/TYPE
+      (clean-resolve sym))))
 
 (defn resolve-asm
   [cls]
-  (let [resolved (cond
-                  (and (seqable? cls) (= (count cls) 1))
-                  (class (make-array (maybe-prim-resolve (first cls)) 0))
-
-                  (symbol? cls)
-                  (maybe-prim-resolve cls)
-
-                  :else
-                  (throw (IllegalArgumentException. (str "Invalid type annotation: " cls))))]
-    (asmtype resolved)))
+  (asmtype (maybe-prim-resolve cls)))
 
 (defn method
   [[ret name & params]]
@@ -152,3 +145,51 @@
     '#{Class java.lang.Class} (. gen push (resolve-asm val))
     '#{String java.lang.String} (. gen push (cast String val))
     (throw (IllegalArgumentException. (str "Cannot push type " type)))))
+
+(defn plain-sym?
+  [sym]
+  (not (or (namespace sym)
+           (.contains (name sym) "."))))
+
+(defn compute-modifiers
+  [mods]
+  (reduce #(+ %1 (or (modifiers %2)
+                     (throw (IllegalArgumentException. (str "Invalid modifier: " %2)))))
+          mods))
+
+(defn parse-fields
+  [fields]
+  (letfn [(validate! [sym]
+            (when-not (and (symbol? sym) (plain-sym? sym))
+                            (throw (IllegalArgumentExcption. (str "invalid field name: " sym))))
+            sym)
+          (parse [f]
+            (if (seqable? f)
+              (parse-seq f)
+              (let [sym (validate! f)]
+                {:sym sym :name (munge (name sym)) :type Object :modifiers ['public]})))
+          (parse-seq [[f type & mods]]
+            (doseq [m mods]
+              (when-not (contains? modifiers m)
+                (throw (IllegalArgumentException. (str "Invalid modifer: " m)))))
+            (let [type (maybe-prim-resolve type)
+                  sym (validate! f)]
+              {:sym sym :name (munge (name sym)) :type type :modifiers mods}))]
+    (mapv parse fields)))
+
+(defmethod compile 'define-class*
+  [[_ cname fields interfaces & methods :as defclass]]
+
+  (throw (IllegalStateException. "define-class* isn't implemented. Oops."))
+  
+  ;; (debug "Compiling: " defclass)
+  ;; (when (or (namespace cname)
+  ;;           (.contains (name cname) "."))
+  ;;   (throw (IllegalArgumentException. "class name cannot contain \"/\" or \".\"")))
+  ;; (let [cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
+  ;;       fqname (str "wombat/" (munge cname))
+  ;;       dotname (.replace fqname "/" ".")
+  ;;       parsed-fields (parse-fields fields)
+  ;;       env {:thistype (Type/getObjectType fqname)}]
+  ;;   (. cw visit Opcodes/V1_7 Opcodes/ACC_PUBLIC fqname nil "java/lang/Object" (make-array String 0)))
+  )
