@@ -27,16 +27,20 @@
     (#:jvm (#:emit named)
           (checkCast clojure.lang.Named)
           (invokeInterface clojure.lang.Named (String "getName")))))
-#;
+
+; This is NOT recursive!
+; (if (null? ...) ...) is a special case in the compiler!
 (define null?
   (lambda (o)
-    (#:jvm (#:emit o)
-           (ifNull #:false)
-           (#:emit #t)
-           (goTo #:end)
-           (label #:false)
-           (#:emit #f)
-           (label #:end))))
+    (if (null? o)
+      #t
+      #f)))
+
+(define not
+  (lambda (o)
+    (if o
+      #f
+      #t)))
 
 (define get-var
   (lambda (sym)
@@ -82,9 +86,9 @@
 (define eqv?
   (lambda (a b)
     (#:jvm (#:emit a)
-          (#:emit b)
-          (invokeVirtual Object (boolean "equals" Object))
-          (box boolean))))
+           (#:emit b)
+           (invokeVirtual Object (boolean "equals" Object))
+           (box boolean))))
 
 (define gensym
   (lambda ()

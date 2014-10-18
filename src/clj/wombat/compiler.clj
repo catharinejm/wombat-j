@@ -55,6 +55,8 @@
     'define-class*
     'quote
     'begin
+    'null?
+    'not
     rest-token})
 
 (defn sanitize-name
@@ -634,9 +636,29 @@
     (throw (IllegalArgumentException. "if takes 2 or 3 forms")))
   (let [false-label (. gen newLabel)
         end-label (. gen newLabel)]
-    (emit env :context/expression gen condition)
-    (. gen getStatic boolean-object-type "FALSE" boolean-object-type)
-    (. gen ifCmp boolean-object-type GeneratorAdapter/EQ false-label)
+    (cond
+                                        ; optmize common case (if (null? ...) ...)
+     (and (seqable? condition) (= (first condition) 'null?))
+     (do
+       (when (not= (count condition) 2)
+         (throw (IllegalArgumentException. "`null?' takes exactly one argument")))
+       (emit env :context/expression gen (second condition))
+       (. gen ifNonNull false-label))
+
+                                        ; optimize common case (if (not ...) ...)
+     (and (seqable? condition) (= (first condition) 'not))
+     (do
+       (when (not= (count condition) 2)
+         (throw (IllegalArgumentException. "`not' takes exactly one argument")))
+       (emit env :context/expression gen (second condition))
+       (. gen getStatic boolean-object-type "FALSE" boolean-object-type)
+       (. gen ifCmp boolean-object-type GeneratorAdapter/NE false-label))
+
+     :else
+     (do
+       (emit env :context/expression gen condition)
+       (. gen getStatic boolean-object-type "FALSE" boolean-object-type)
+       (. gen ifCmp boolean-object-type GeneratorAdapter/EQ false-label)))
     (emit env context gen then)
     (. gen goTo end-label)
     (. gen mark false-label)
@@ -669,8 +691,9 @@
 (declare emit-jvm)
 (defmethod emit-seq :jvm
   [env context ^GeneratorAdapter gen [_ & insns]]
-  (doseq [i insns]
-    (emit-jvm (assoc env :labels (atom {})) context gen i)))
+  (let [labeled-env (assoc env :labels (atom {}))]
+    (doseq [i insns]
+      (emit-jvm labeled-env context gen i))))
 
 (defmethod emit-seq -invoke-
   [env context ^GeneratorAdapter gen [fun & args :as call]]

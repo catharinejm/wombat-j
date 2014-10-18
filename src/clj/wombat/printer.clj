@@ -66,3 +66,7 @@
 (defmethod write Number
   [^Number n ^Writer w]
   (.write w (.toString n)))
+
+(defmethod write :default
+  [o ^Writer w]
+  (print-method o w))
