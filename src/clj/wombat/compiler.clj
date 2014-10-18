@@ -11,6 +11,8 @@
            [wombat ILambda AsmUtil Global])
   (:refer-clojure :exclude [compile load-file eval read]))
 
+;(set! *warn-on-reflection* true)
+
 (def ^:dynamic *class-loader* (DynamicClassLoader. (RT/baseLoader)))
 
 (def clean-resolve (partial ns-resolve 'wombat.empty))
@@ -202,14 +204,14 @@
          eval)
 
 (defn asmtype ^Type [^Class cls] (Type/getType cls))
-(def object-type (asmtype Object))
-(def boolean-object-type (asmtype Boolean))
-(def ilambda-type (asmtype ILambda))
-(def void-ctor (Method/getMethod "void <init>()"))
+(def ^Type object-type (asmtype Object))
+(def ^Type boolean-object-type (asmtype Boolean))
+(def ^Type ilambda-type (asmtype ILambda))
+(def ^Method void-ctor (Method/getMethod "void <init>()"))
 
 (defn dotmunge
   [str]
-  (.replace (munge str) "." "_DOT_"))
+  (.replace ^String (munge str) "." "_DOT_"))
 
 (defn close-name
   [fsym]
@@ -273,7 +275,7 @@
     (. gen endMethod)))
 
 (defn emit-array
-  [gen asm-type contents]
+  [^GeneratorAdapter gen asm-type contents]
   (AsmUtil/pushInt gen (count contents))
   (. gen newArray asm-type)
   (dotimes [n (count contents)]
@@ -285,7 +287,7 @@
     (. gen arrayStore asm-type)))
 
 (defn method-type
-  [gen arity restarg]
+  [^GeneratorAdapter gen arity restarg]
   (. gen push object-type)
   (let [positional (repeat arity object-type)
         sig (if restarg
@@ -295,7 +297,7 @@
   (. gen invokeStatic (asmtype MethodType) (Method/getMethod "java.lang.invoke.MethodType methodType(Class,Class[])")))
 
 (defn gen-handle
-  [cw {:keys [params restarg thistype] :as env}]
+  [cw {:keys [params restarg ^Type thistype] :as env}]
   (let [^ClassVisitor cv cw
         arity (count params)
         handle (handle-name arity restarg)]
@@ -439,7 +441,7 @@
             (MethodType/methodType CallSite (into-array Class [MethodHandles$Lookup String MethodType String])))))
 
 (defn emit-global
-  [gen sym]
+  [^GeneratorAdapter gen sym]
   (. gen invokeDynamic "getGlobal"
      (.toMethodDescriptorString (MethodType/methodType Object (make-array Class 0)))
      global-bootstrap
@@ -570,7 +572,7 @@
   :default -invoke-)
 
 (defmethod emit-seq 'lambda
-  [env context gen [_ params & body :as lambda]]
+  [env context ^GeneratorAdapter gen [_ params & body :as lambda]]
   (when-not (= context :context/statement)
     (let [[dotname bytecode closed-overs] (compile lambda)]
       (. *class-loader* defineClass dotname bytecode lambda)
@@ -586,7 +588,7 @@
 ;;   [env context gen [_ fields :as defcls]])
 
 (defmethod emit-seq 'let
-  [env context gen [_ bindings & body :as the-let]]
+  [env context ^GeneratorAdapter gen [_ bindings & body :as the-let]]
   (let [start-label (. gen newLabel)
         end-label (. gen newLabel)
         names (mapv #(vector (first %) (. gen newLocal object-type)) bindings)
@@ -600,13 +602,13 @@
       (emit-body let-env context gen body))))
 
 (defmethod emit-seq 'quote
-  [env context gen [_ quoted :as form]]
+  [env context ^GeneratorAdapter gen [_ quoted :as form]]
   (when (> (count form) 2)
     (throw (IllegalArgumentException. "quote takes exactly one argument")))
   (emit-value context gen quoted))
 
 (defmethod emit-seq 'begin
-  [env context gen [_ & exprs :as form]]
+  [env context ^GeneratorAdapter gen [_ & exprs :as form]]
   (emit-body env context gen exprs))
 
 (defn set-global!
@@ -619,14 +621,14 @@
   value)
 
 (defmethod emit-seq 'define
-  [env context gen [_ name val :as form]]
+  [env context ^GeneratorAdapter gen [_ name val :as form]]
   (when (> (count form) 3)
     (throw (IllegalArgumentException. "define only takes one value")))
   (set-global! name (eval* val))
   (emit-global gen name))
 
 (defmethod emit-seq 'if
-  [env context gen [_ condition then else :as the-if]]
+  [env context ^GeneratorAdapter gen [_ condition then else :as the-if]]
   (debug "emit-seq if" the-if context)
   (when-not (<= 3 (count the-if) 4)
     (throw (IllegalArgumentException. "if takes 2 or 3 forms")))
@@ -649,7 +651,7 @@
 (defn asm-println
   "Generates bytecode to print the toString of whatever is on top of
   the stack. Leaves stack unchaged."
-  [gen]
+  [^GeneratorAdapter gen]
   (. gen dup)
   (. gen invokeVirtual object-type (Method/getMethod "String toString()"))
   (. gen push "DEBUG: ")
@@ -664,19 +666,19 @@
   (. gen invokeVirtual (asmtype java.io.PrintWriter) (Method/getMethod "void println(String)")))
 
 (defn emit-var
-  [gen sym]
+  [^GeneratorAdapter gen sym]
   (. gen push (namespace sym))
   (. gen push (name sym))
   (. gen invokeStatic (asmtype RT) (Method/getMethod "clojure.lang.Var var(String,String)")))
 
 (declare emit-jvm)
 (defmethod emit-seq :jvm
-  [env context gen [_ & insns]]
+  [env context ^GeneratorAdapter gen [_ & insns]]
   (doseq [i insns]
     (emit-jvm env context gen i)))
 
 (defmethod emit-seq -invoke-
-  [env context gen [fun & args :as call]]
+  [env context ^GeneratorAdapter gen [fun & args :as call]]
   (when (nil? fun)
     (throw (IllegalArgumentException. "Can't invoke nil")))
   (debug "emitting invoke:" call)
