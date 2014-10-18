@@ -1,6 +1,7 @@
 (ns wombat.core
   (:require [wombat.compiler :as compiler]
-            [wombat.reader :as reader])
+            [wombat.reader :as reader]
+            [wombat.printer :refer [write]])
   (:import [java.lang.invoke MethodHandles CallSite]))
 
 (defn bootstrap []
@@ -47,7 +48,8 @@
            (do
              (try
                (let [val (compiler/eval f)]
-                 (println val)
+                 (write val *out*)
+                 (.write *out* "\n")
                  (.flush *out*)
                  (binding [compiler/*print-debug* false]
                    (compiler/eval '(define *3 *2))

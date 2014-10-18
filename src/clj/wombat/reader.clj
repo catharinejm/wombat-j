@@ -275,7 +275,7 @@
        (named-chars tok)
 
        :else
-       (throw (RuntimeException. (str "Unsupported character: \\" tok)))))))
+       (throw (RuntimeException. (str "Unsupported character: #\\" tok)))))))
 
 (defmethod read-dispatch-form :keyword
   [^LineNumberingPushbackReader rdr c]

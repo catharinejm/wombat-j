@@ -497,66 +497,71 @@
   (throw (IllegalArgumentException. (str "cannot emit-dup of " obj))))
 
 (defmethod emit-dup Class
-  [gen ^Class class]
+  [^GeneratorAdapter gen ^Class class]
   (debug "emit-dup class" class)
   (. gen push (asmtype class)))
 
 (defmethod emit-dup Integer
-  [gen ^Integer int]
+  [^GeneratorAdapter gen ^Integer int]
   (debug "emit-dup int" int)
   (AsmUtil/pushInt gen int)
   (. gen invokeStatic (asmtype Integer) (Method/getMethod "Integer valueOf(int)")))
 
 (defmethod emit-dup Long
-  [gen ^Long long]
+  [^GeneratorAdapter gen ^Long long]
   (debug "emit-dup long" long)
   (AsmUtil/pushLong gen long)
   (. gen invokeStatic (asmtype Long) (Method/getMethod "Long valueOf(long)")))
 
 (defmethod emit-dup Float
-  [gen ^Float float]
+  [^GeneratorAdapter gen ^Float float]
                                         ; Cast up to double
   (debug "emit-dup float" float)
   (. gen push (.doubleValue float))
   (. gen invokeStatic (asmtype Double) (Method/getMethod "Double valueOf(double)")))
 
 (defmethod emit-dup Double
-  [gen ^Double double]
+  [^GeneratorAdapter gen ^Double double]
   (debug "emit-dup double" double)
   (. gen push (.doubleValue double))
   (. gen invokeStatic (asmtype Double) (Method/getMethod "Double valueOf(double)")))
 
 (defmethod emit-dup Character
-  [gen ^Character char]
+  [^GeneratorAdapter gen ^Character char]
   (debug "emit-dup char" char)
-  (. gen push (.charValue char))
+  (. gen push (int (.charValue char)))
   (. gen invokeStatic (asmtype Character) (Method/getMethod "Character valueOf(char)")))
 
 (defmethod emit-dup String
-  [gen ^String string]
+  [^GeneratorAdapter gen ^String string]
   (debug "emit-dup string" string)
   (. gen push string))
 
 (defmethod emit-dup Symbol
-  [gen ^Symbol sym]
+  [^GeneratorAdapter gen ^Symbol sym]
   (debug "emit-dup symbol" sym)
   (emit-value :context/expression gen (namespace sym))
   (emit-value :context/expression gen (name sym))
   (. gen invokeStatic (asmtype Symbol) (Method/getMethod "clojure.lang.Symbol intern(String,String)")))
 
 (defmethod emit-dup clojure.lang.Keyword
-  [gen ^clojure.lang.Keyword kw]
+  [^GeneratorAdapter gen ^clojure.lang.Keyword kw]
   (debug "emit-dup keyword" kw)
   (emit-value :context/expression gen (namespace kw))
   (emit-value :context/expression gen (name kw))
   (. gen invokeStatic (asmtype clojure.lang.Keyword) (Method/getMethod "clojure.lang.Keyword intern(String,String)")))
 
 (defmethod emit-dup clojure.lang.Seqable
-  [gen ^clojure.lang.Seqable lis]
+  [^GeneratorAdapter gen ^clojure.lang.Seqable lis]
   (debug "emit-dup list" lis)
   (emit-array gen object-type (map #(fn [] (emit-value :context/expression gen %)) lis))
   (. gen invokeStatic (asmtype java.util.Arrays) (Method/getMethod "java.util.List asList(Object[])"))
   (. gen invokeStatic (asmtype clojure.lang.PersistentList) (Method/getMethod "clojure.lang.IPersistentList create(java.util.List)")))
+
+(defmethod emit-dup object-array-class
+  [^GeneratorAdapter gen ^objects ary]
+  (debug "emit-dup Object[]")
+  (emit-array gen object-type (map #(fn [] (emit-value :context/expression gen %)) ary)))
 
 
 (defonce -invoke- (Object.))
