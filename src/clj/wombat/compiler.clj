@@ -1,6 +1,7 @@
 (ns wombat.compiler
   (:require [clojure.core.match :refer [match]]
-            wombat.empty)
+            wombat.empty
+            [wombat.reader :refer [read]])
   (:import [org.objectweb.asm ClassWriter ClassVisitor Opcodes Type Handle]
            [org.objectweb.asm.commons GeneratorAdapter Method]
            [clojure.lang DynamicClassLoader Compiler RT LineNumberingPushbackReader Keyword Symbol]
@@ -8,7 +9,7 @@
             CallSite VolatileCallSite]
            [java.io FileReader]
            [wombat ILambda AsmUtil Global])
-  (:refer-clojure :exclude [compile load-file]))
+  (:refer-clojure :exclude [compile load-file eval read]))
 
 (def ^:dynamic *class-loader* (DynamicClassLoader. (RT/baseLoader)))
 
@@ -27,6 +28,7 @@
     (apply println vals)))
 
 (def global-bindings (atom {}))
+(def ^:dynamic *current-define* nil)
 
 (def seqable?
   "True if the given value implements clojure.lang.Seqable. Note that
@@ -38,8 +40,20 @@
 (defn next-id []
   (swap! -id- inc'))
 
+(def rest-token (symbol "#!rest"))
+(defn special-token?
+  [sym]
+  (.startsWith (name sym) "#!"))
+
 (def specials
-  '#{lambda let if define define-class* quote begin})
+  #{'lambda
+    'let
+    'if
+    'define
+    'define-class*
+    'quote
+    'begin
+    rest-token})
 
 (defn sanitize-name
   [sym]
@@ -48,7 +62,7 @@
 (defn extend-env
   [env syms]
   (reduce #(assoc %1 %2 (sanitize-name %2))
-          env (filter symbol? syms)))
+          env (remove special-token? syms)))
 
 (defn substitute
   "Renames a plain symbol to its sanitized name in the given
@@ -64,6 +78,7 @@
     (or (get env sym)
         (get specials sym)
         (and (contains? @global-bindings sym) sym)
+        (and (= *current-define* sym) sym)
         (and (maybe-class sym) sym)
         (throw (IllegalArgumentException. (str "symbol " sym " is not defined"))))
     sym))
@@ -72,7 +87,7 @@
 
 (defn sanitize-lambda
   [env [_ params & body :as form]]
-  (let [params (if (symbol? params) (list :!rest params) params)
+  (let [params (if (symbol? params) (list rest-token params) params)
         lambda-env (extend-env env params)]
     (list* 'lambda (map (partial substitute lambda-env) params) (map (partial sanitize lambda-env) body))))
 
@@ -143,7 +158,7 @@
      (['quote val] :seq) (sorted-set)
 
      (['lambda params & body] :seq)
-     (apply disj (free-vars body) (filter symbol? params))
+     (apply disj (free-vars body) (remove special-token? params))
 
      (['let bindings & body] :seq)
      (apply disj
@@ -170,6 +185,7 @@
    (and (symbol? form)
         (not (contains? specials form))
         (not (contains? @global-bindings form))
+        (not= *current-define* form)
         (not (maybe-class form)))
    (sorted-set form)
 
@@ -183,7 +199,7 @@
          emit-symbol
          emit-string
          eval*
-         scheme-eval)
+         eval)
 
 (defn asmtype ^Type [^Class cls] (Type/getType cls))
 (def object-type (asmtype Object))
@@ -355,10 +371,9 @@
 
 (defn validate-params!
   [params]
-  (when (> (count (drop-while (complement #{:!rest}) params)) 2)
-    (throw (IllegalArgumentException. ":!rest may only be followed by one symbol!")))
-  (when (seq (filter #(and (keyword? %) (not (#{:!rest} %))) params))
-    (throw (IllegalArgumentException. "Only :!rest keyword supported in params"))))
+  (when (and (some #{rest-token} params)
+             (not= (count (drop-while (complement #{rest-token}) params)) 2))
+    (throw (IllegalArgumentException. "#!rest may only be followed by one symbol!"))))
 
 (def ^:dynamic *compiled-lambdas*)
 
@@ -385,7 +400,7 @@
           _ (debug "fqname:" fqname)
           dotname (.replace fqname "/" ".")
           ifaces (into-array String ["wombat/ILambda"])
-          before-rest (complement #{:!rest})
+          before-rest (complement #{rest-token})
           restarg (second (drop-while before-rest params))
           env {:params (take-while before-rest params)
                :closed-overs fv
@@ -444,7 +459,8 @@
    (contains? locals sym)
    (. gen loadLocal (get locals sym))
 
-   (contains? @global-bindings sym)
+   (or (contains? @global-bindings sym)
+       (= *current-define* sym))
    (emit-global gen sym)
    
    (maybe-class sym)
@@ -700,7 +716,8 @@
   (debug "EVAL*: " form)
   (cond
    (and (seqable? form) (= (first form) 'define))
-   (set-global! (second form) (eval* (first (nnext form))))
+   (binding [*current-define* (second form)]
+     (set-global! (second form) (eval* (first (nnext form)))))
 
    (and (seqable? form) (= (first form) 'define-class*))
    (set-global! (second form) (compile-and-load form))
@@ -708,7 +725,7 @@
    :else
    (.. (compile-and-load (list 'lambda () form)) newInstance invoke)))
 
-(defn scheme-eval
+(defn eval
   "Top-level eval call. Initializes env and sanitizes input."
   [form]
   (binding [*compiled-lambdas* (atom #{})]
@@ -724,7 +741,7 @@
       (loop []
         (let [f (read pb-reader false eof)]
           (when-not (identical? f eof)
-            (scheme-eval f)
+            (eval f)
             (recur)))))))
 
 (load "compiler_defclass")

@@ -1,5 +1,6 @@
 (ns wombat.core
-  (:require [wombat.compiler :refer [scheme-eval] :as compiler])
+  (:require [wombat.compiler :as compiler]
+            [wombat.reader :as reader])
   (:import [java.lang.invoke MethodHandles CallSite]))
 
 (defn bootstrap []
@@ -15,12 +16,12 @@
   []
   (binding [compiler/*print-debug* false]
     (doseq [expr '[*1 *2 *3 *e]]
-      (scheme-eval (list 'define expr)))
+      (compiler/eval (list 'define expr)))
     (let [last-err (atom nil)]
       (loop []
         (printf "wombat> ")
         (.flush *out*)
-        (let [f (try (read)
+        (let [f (try (reader/read *in*)
                      (catch Throwable e
                        (reset! last-err e)
                        (print-exception e)
@@ -45,12 +46,12 @@
            (not= f :quit)
            (do
              (try
-               (let [val (scheme-eval f)]
+               (let [val (compiler/eval f)]
                  (println val)
                  (.flush *out*)
                  (binding [compiler/*print-debug* false]
-                   (scheme-eval '(define *3 *2))
-                   (scheme-eval '(define *2 *1))
+                   (compiler/eval '(define *3 *2))
+                   (compiler/eval '(define *2 *1))
                    (compiler/set-global! '*1 val)))
                (catch Throwable e
                  (reset! last-err e)
@@ -64,5 +65,8 @@
 
 (defn -main
   [& args]
-  (bootstrap)
+  (try (bootstrap)
+       (catch Exception e
+         (binding [*out* *err*]
+           (println "bootstrap failed..."))))
   (repl))

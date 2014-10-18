@@ -52,8 +52,8 @@
 
 (defn maybe-prim-resolve
   [sym]
-  (if (and (seqable? cls) (= (count cls) 1))
-    (class (make-array (maybe-prim-resolve (first cls)) 0))
+  (if (and (seqable? sym) (= (count sym) 1))
+    (class (make-array (maybe-prim-resolve (first sym)) 0))
     (condp = sym
       'int Integer/TYPE
       'ints (class (int-array 0))
@@ -151,6 +151,7 @@
   (not (or (namespace sym)
            (.contains (name sym) "."))))
 
+(declare modifiers)
 (defn compute-modifiers
   [mods]
   (reduce #(+ %1 (or (modifiers %2)
@@ -161,7 +162,7 @@
   [fields]
   (letfn [(validate! [sym]
             (when-not (and (symbol? sym) (plain-sym? sym))
-                            (throw (IllegalArgumentExcption. (str "invalid field name: " sym))))
+                            (throw (IllegalArgumentException. (str "invalid field name: " sym))))
             sym)
           (parse [f]
             (if (seqable? f)
