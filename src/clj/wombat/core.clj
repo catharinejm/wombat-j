@@ -5,7 +5,12 @@
   (:import [java.lang.invoke MethodHandles CallSite]))
 
 (defn bootstrap []
-  (compiler/load-file "src/scm/core.scm"))
+  (try (compiler/load-file "src/scm/core.scm")
+       (catch Exception e
+         (binding [*out* *err*]
+           (println "bootstrap failed...")
+           (println (.getMessage e))
+           (.printStackTrace e)))))
 
 (defn print-exception
   [^Exception e]
@@ -67,8 +72,5 @@
 
 (defn -main
   [& args]
-  (try (bootstrap)
-       (catch Exception e
-         (binding [*out* *err*]
-           (println "bootstrap failed..."))))
+  (bootstrap)
   (repl))

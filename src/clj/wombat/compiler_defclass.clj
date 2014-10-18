@@ -27,26 +27,52 @@
   :default -emit-jvm-default-)
 
 (defmethod emit-jvm -emit-jvm-default-
-  [env context gen insns]
+  [env context ^GeneratorAdapter gen insns]
   (throw (IllegalArgumentException. (str "unrecognized jvm form: " insns))))
 
 (defmethod emit-jvm :emit
-  [env context gen [_ val :as form]]
+  [env context ^GeneratorAdapter gen [_ val :as form]]
   (assert-arity! form 1)
   (emit env :context/expression gen val))
 
 (defmethod emit-jvm :invoke
-  [env context gen [_ fun & args :as form]]
+  [env context ^GeneratorAdapter gen [_ fun & args :as form]]
   (assert-min-arity! form 1)
   (emit-seq env :context/expression gen (cons fun args)))
 
+(defn add-label
+  [{labels :labels} ^GeneratorAdapter gen lname]
+  (let [l (. gen newLabel)]
+    (swap! labels assoc lname l)
+    l))
+
+(defn label
+  [{labels :labels :as env} ^GeneratorAdapter gen lname]
+  (or (get @labels lname)
+      (add-label env gen lname)))
+
+(defmethod emit-jvm 'ifNull
+  [{:keys [labels] :as env} context ^GeneratorAdapter gen [_ lname :as form]]
+  (assert-arity! form 1)
+  (. gen ifNull (label env gen lname)))
+
+(defmethod emit-jvm 'label
+  [{:keys [labels] :as env} context ^GeneratorAdapter gen [_ lname :as form]]
+  (assert-arity! form 1)
+  (. gen mark (label env gen lname)))
+
+(defmethod emit-jvm 'goTo
+  [{:keys [labels] :as env} context ^GeneratorAdapter gen [_ lname :as form]]
+  (assert-arity! form 1)
+  (. gen goTo (label env gen lname)))
+
 (defmethod emit-jvm 'checkCast
-  [env context gen [_ class :as form]]
+  [env context ^GeneratorAdapter gen [_ class :as form]]
   (assert-arity! form 1)
   (. gen checkCast (asmtype (clean-resolve class))))
 
 (defmethod emit-jvm 'loadThis
-  [env context gen form]
+  [env context ^GeneratorAdapter gen form]
   (assert-arity! form 0)
   (. gen loadThis))
 
@@ -83,39 +109,39 @@
   (Method. name (resolve-asm ret) (into-array Type (map resolve-asm params))))
 
 (defmethod emit-jvm :str
-  [env context gen [_ val :as form]]
+  [env context ^GeneratorAdapter gen [_ val :as form]]
   (assert-arity! form 1)
   (emit-symbol env :context/expression gen val)
   (. gen invokeVirtual object-type (method '(String "toString"))))
 
 (defmethod emit-jvm :thistype
-  [{thistype :thistype} context gen form]
+  [{thistype :thistype} context ^GeneratorAdapter gen form]
   (assert-arity! form 0)
   (. gen push thistype))
 
 (defmethod emit-jvm 'getField
-  [{thistype :thistype :as env} context gen [_ name type :as form]]
+  [{thistype :thistype :as env} context ^GeneratorAdapter gen [_ name type :as form]]
   (assert-arity! form 2)
   (. gen loadThis)
   (. gen getField thistype name (resolve-asm type)))
 
 (defmethod emit-jvm 'invokeInterface
-  [env context gen [_ owner sig :as form]]
+  [env context ^GeneratorAdapter gen [_ owner sig :as form]]
   (assert-arity! form 2)
   (. gen invokeInterface (resolve-asm owner) (method sig)))
 
 (defmethod emit-jvm 'invokeStatic
-  [env context gen [_ owner sig :as form]]
+  [env context ^GeneratorAdapter gen [_ owner sig :as form]]
   (assert-arity! form 2)
   (. gen invokeStatic (resolve-asm owner) (method sig)))
 
 (defmethod emit-jvm 'invokeVirtual
-  [env context gen [_ owner sig :as form]]
+  [env context ^GeneratorAdapter gen [_ owner sig :as form]]
   (assert-arity! form 2)
   (. gen invokeVirtual (resolve-asm owner) (method sig)))
 
 (defmethod emit-jvm 'box
-  [env context gen [_ type :as form]]
+  [env context ^GeneratorAdapter gen [_ type :as form]]
   (assert-arity! form 1)
   (if (= type 'boolean)
     (let [false-label (. gen newLabel)
@@ -129,12 +155,12 @@
     (. gen box (resolve-asm type))))
 
 (defmethod emit-jvm 'unbox
-  [env context gen [_ type :as form]]
+  [env context ^GeneratorAdapter gen [_ type :as form]]
   (assert-arity! form 1)
   (. gen unbox (resolve-asm type)))
 
 (defmethod emit-jvm 'push
-  [env context gen [_ type val :as form]]
+  [env context ^GeneratorAdapter gen [_ type val :as form]]
   (assert-arity! form 2)
   (condp #(%1 %2) type
     '#{int} (AsmUtil/pushInt gen val)

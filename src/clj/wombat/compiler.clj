@@ -632,18 +632,13 @@
   (debug "emit-seq if" the-if context)
   (when-not (<= 3 (count the-if) 4)
     (throw (IllegalArgumentException. "if takes 2 or 3 forms")))
-  (let [null-label (. gen newLabel)
-        false-label (. gen newLabel)
+  (let [false-label (. gen newLabel)
         end-label (. gen newLabel)]
     (emit env :context/expression gen condition)
-    (. gen dup)
-    (. gen ifNull null-label)
     (. gen getStatic boolean-object-type "FALSE" boolean-object-type)
     (. gen ifCmp boolean-object-type GeneratorAdapter/EQ false-label)
     (emit env context gen then)
     (. gen goTo end-label)
-    (. gen mark null-label)
-    (. gen pop) ; pop dup of condition created for false check
     (. gen mark false-label)
     (emit env context gen else)
     (. gen mark end-label)))
@@ -675,7 +670,7 @@
 (defmethod emit-seq :jvm
   [env context ^GeneratorAdapter gen [_ & insns]]
   (doseq [i insns]
-    (emit-jvm env context gen i)))
+    (emit-jvm (assoc env :labels (atom {})) context gen i)))
 
 (defmethod emit-seq -invoke-
   [env context ^GeneratorAdapter gen [fun & args :as call]]

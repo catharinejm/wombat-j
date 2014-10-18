@@ -27,33 +27,43 @@
     (#:jvm (#:emit named)
           (checkCast clojure.lang.Named)
           (invokeInterface clojure.lang.Named (String "getName")))))
+#;
+(define null?
+  (lambda (o)
+    (#:jvm (#:emit o)
+           (ifNull #:false)
+           (#:emit #t)
+           (goTo #:end)
+           (label #:false)
+           (#:emit #f)
+           (label #:end))))
 
 (define get-var
   (lambda (sym)
     (#:jvm (#:invoke namespace sym)
-          (checkCast String)
-          (#:invoke name sym)
-          (checkCast String)
-          (invokeStatic clojure.lang.RT (clojure.lang.Var "var" String String)))))
+           (checkCast String)
+           (#:invoke name sym)
+           (checkCast String)
+           (invokeStatic clojure.lang.RT (clojure.lang.Var "var" String String)))))
 
 (define class
   (lambda (obj)
     (#:jvm (#:emit obj)
-          (invokeVirtual Object (Class "getClass")))))
+           (invokeVirtual Object (Class "getClass")))))
 
 (define instance?
   (lambda (cls o)
     (#:jvm (#:emit cls)
-          (checkCast Class)
-          (#:emit o)
-          (invokeVirtual Class (boolean "isInstance" Object))
-          (box boolean))))
+           (checkCast Class)
+           (#:emit o)
+           (invokeVirtual Class (boolean "isInstance" Object))
+           (box boolean))))
 
 (define string->symbol
   (lambda (str)
     (#:jvm (#:emit str)
-          (checkCast String)
-          (invokeStatic clojure.lang.Symbol (clojure.lang.Symbol "intern" String)))))
+           (checkCast String)
+           (invokeStatic clojure.lang.Symbol (clojure.lang.Symbol "intern" String)))))
 
 (define str
   (lambda (val)
@@ -62,8 +72,8 @@
 (define conc
   (lambda (s1 s2)
     (#:jvm (#:str s1)
-          (#:str s2)
-          (invokeVirtual String (String "concat" String)))))
+           (#:str s2)
+           (invokeVirtual String (String "concat" String)))))
 
 (define eval
   (lambda (form)
