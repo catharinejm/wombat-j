@@ -683,16 +683,27 @@
   (let [false-label (. gen newLabel)
         end-label (. gen newLabel)]
     (cond
-                                        ; optmize common case (if (null? ...) ...)
-     (and (seqable? condition) (= (first condition) 'null?))
+                                        ; optimize common case (if (null? ...) ...)
+     (and (list-like? condition) (= (first condition) 'null?))
      (do
        (when (not= (count condition) 2)
          (throw (IllegalArgumentException. "`null?' takes exactly one argument")))
        (emit env :context/expression gen (second condition))
        (. gen ifNonNull false-label))
 
+                                        ; optimize common case (if (not (null? ...)) ...)
+     (and (list-like? condition) (= (first condition) 'not)
+          (list-like? (second condition)) (= (first (second condition)) 'null?))
+     (do
+       (when (not= (count condition) 2)
+         (throw (IllegalArgumentException. "`not' takes exactly one argument")))
+       (when (not= (count (second condition)) 2)
+         (throw (IllegalArgumentException. "`null?' takes exactly one argument")))
+       (emit env :context/expression gen (second (second condition)))
+       (. gen ifNull false-label))
+
                                         ; optimize common case (if (not ...) ...)
-     (and (seqable? condition) (= (first condition) 'not))
+     (and (list-like? condition) (= (first condition) 'not))
      (do
        (when (not= (count condition) 2)
          (throw (IllegalArgumentException. "`not' takes exactly one argument")))
