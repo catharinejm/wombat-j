@@ -293,7 +293,7 @@
               (assoc-in env [:locals restarg] rest-id)
               env)
         top-label (. gen newLabel)
-        env (assoc-in env :top-label top-label)]
+        env (assoc env :top-label top-label)]
     (. gen visitCode)
     (. gen mark top-label)
     (when rest-id
@@ -753,7 +753,7 @@
 
 (declare no-continuation-lambda)
 (defn emit-tail-call
-  [{:keys [recur-sym restarg top-label] :as env} ^GeneratorAdapter gen [fun & args :as call]]
+  [{:keys [recur-sym restarg top-label params] :as env} ^GeneratorAdapter gen [fun & args :as call]]
   (if (= fun recur-sym)
                                         ; Self call, becomes loop
     (do
@@ -762,7 +762,7 @@
         (throw (IllegalArgumentException.
                 (str "Wrong number of args (" (count args) " for " (count params) (when restarg "+") ")"))))
       (dotimes [n (count params)]
-        (emit env :context/expression (nth args n))
+        (emit env :context/expression gen (nth args n))
         (. gen storeArg n))
       (when-let [extra (seq (drop (count params) args))]
         (emit-array gen Object extra)
