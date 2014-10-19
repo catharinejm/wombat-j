@@ -437,6 +437,7 @@
           env {:params (take-while before-rest params)
                :closed-overs fv
                :locals {}
+               :recur-sym *current-define* ;; TODO: Enable named lambdas
                :thistype (Type/getObjectType fqname)
                :restarg restarg}]
       (. cw visit Opcodes/V1_7 Opcodes/ACC_PUBLIC fqname nil "java/lang/Object" ifaces)
@@ -752,6 +753,19 @@
     (doseq [i insns]
       (emit-jvm labeled-env context gen i))))
 
+(defn emit-tail-call
+  [{:keys [recur-sym] :as env} ^GeneratorAdapter gen [fun & args :as call]]
+  (if (= fun recur-sym)
+    (when (or (and restarg (not (>= (count args) (count params))))
+              (not= (count args) (count params)))
+      (throw (IllegalArgumentException.
+              (str "Wrong number of args (" (count args) " for " (count params) (when restarg "+") ")"))))
+    (dotimes [n (count params)]
+      (emit env :context/expression (nth args n))
+      (. gen storeArg n))
+    (when-let [extra (seq (drop (count params) args))]
+      )))
+
 (defmethod emit-seq -invoke-
   [env context ^GeneratorAdapter gen [fun & args :as call]]
   (when (nil? fun)
@@ -759,31 +773,32 @@
   (debug "emitting invoke:" call)
   (debug "context:" context)
 
-  (if (keyword? fun)
-    (let [fn-sym (symbol (or (namespace fun) "clojure.core") (name fun))]
-      (debug "keyword invoke: " fun)
-      (when-not (clean-resolve fn-sym)
-        (throw (IllegalArgumentException. (str "Unable to resolve clojure symbol " fn-sym))))
+  (if (= context :context/return)
+    (emit-tail-call env gen call)
+    (if (keyword? fun)
+      (let [fn-sym (symbol (or (namespace fun) "clojure.core") (name fun))]
+        (debug "keyword invoke: " fun)
+        (when-not (clean-resolve fn-sym)
+          (throw (IllegalArgumentException. (str "Unable to resolve clojure symbol " fn-sym))))
 
-      (emit-var gen fn-sym)
-      (doseq [a args]
-        (emit env :context/expression gen a))
-      (. gen invokeVirtual (asmtype clojure.lang.Var) (Method. "invoke" object-type (into-array Type (repeat (count args) object-type)))))
-    (do
-      (emit env :context/expression gen fun)
-      (. gen dup)
-      (. gen checkCast ilambda-type)
-      (AsmUtil/pushInt gen (count args))
-      (. gen invokeInterface ilambda-type (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)"))
-      (. gen swap)
+        (emit-var gen fn-sym)
+        (doseq [a args]
+          (emit env :context/expression gen a))
+        (. gen invokeVirtual (asmtype clojure.lang.Var) (Method. "invoke" object-type (into-array Type (repeat (count args) object-type)))))
+      (do
+        (emit env :context/expression gen fun)
+        (. gen dup)
+        (. gen checkCast ilambda-type)
+        (AsmUtil/pushInt gen (count args))
+        (. gen invokeInterface ilambda-type (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)"))
+        (. gen swap)
 
-      (doseq [a args]
-        (emit env :context/expression gen a))
-      (. gen invokeVirtual (asmtype MethodHandle)
-         (Method. "invoke" object-type (into-array Type (cons ilambda-type (repeat (count args) object-type)))))))
-
-  (when (= context :context/statement)
-    (. gen pop)))
+        (doseq [a args]
+          (emit env :context/expression gen a))
+        (. gen invokeVirtual (asmtype MethodHandle)
+           (Method. "invoke" object-type (into-array Type (core/cons ilambda-type (repeat (count args) object-type)))))))
+    (when (= context :context/statement)
+      (. gen pop))))
 
 (defn compile-and-load
   ^Class [form]
