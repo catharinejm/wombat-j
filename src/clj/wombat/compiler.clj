@@ -270,9 +270,7 @@
 
 (defn emit-list-from-array
   [^GeneratorAdapter gen emit-array-fn]
-  (. gen push "wombat.datatypes")
-  (. gen push "javalist->list")
-  (. gen invokeStatic (asmtype clojure.lang.RT) (Method/getMethod "clojure.lang.Var var(String,String)"))
+  (. gen getStatic (asmtype Global) "JAVALIST_TO_LIST" (asmtype clojure.lang.Var))
   (emit-array-fn)
   (. gen invokeStatic (asmtype java.util.Arrays) (Method/getMethod "java.util.List asList(Object[])"))
   (. gen invokeVirtual (asmtype clojure.lang.Var) (Method/getMethod "Object invoke(Object)")))
@@ -297,10 +295,10 @@
         top-label (. gen newLabel)
         env (assoc-in env :top-label top-label)]
     (. gen visitCode)
+    (. gen mark top-label)
     (when rest-id
       (emit-list-from-array gen #(. gen loadArg (count params)))
       (. gen storeLocal rest-id))
-    (. gen mark top-label)
     (emit-body env :context/return gen body)
     (. gen returnValue)
     (. gen endMethod)))
@@ -753,18 +751,29 @@
     (doseq [i insns]
       (emit-jvm labeled-env context gen i))))
 
+(declare no-continuation-lambda)
 (defn emit-tail-call
-  [{:keys [recur-sym] :as env} ^GeneratorAdapter gen [fun & args :as call]]
+  [{:keys [recur-sym restarg top-label] :as env} ^GeneratorAdapter gen [fun & args :as call]]
   (if (= fun recur-sym)
-    (when (or (and restarg (not (>= (count args) (count params))))
-              (not= (count args) (count params)))
-      (throw (IllegalArgumentException.
-              (str "Wrong number of args (" (count args) " for " (count params) (when restarg "+") ")"))))
-    (dotimes [n (count params)]
-      (emit env :context/expression (nth args n))
-      (. gen storeArg n))
-    (when-let [extra (seq (drop (count params) args))]
-      )))
+                                        ; Self call, becomes loop
+    (do
+      (when (or (and restarg (not (>= (count args) (count params))))
+                (not= (count args) (count params)))
+        (throw (IllegalArgumentException.
+                (str "Wrong number of args (" (count args) " for " (count params) (when restarg "+") ")"))))
+      (dotimes [n (count params)]
+        (emit env :context/expression (nth args n))
+        (. gen storeArg n))
+      (when-let [extra (seq (drop (count params) args))]
+        (emit-array gen Object extra)
+        (. gen storeArg (count params)))
+      (. gen goTo top-label))
+                                        ; Calls another fn, return continuation thunk
+    (do
+      (. gen newInstance (asmtype wombat.Continuation))
+      (. gen dup)
+      (emit env :context/expression gen (no-continuation-lambda call))
+      (. gen invokeConstructor (asmtype wombat.Continuation) (Method/getMethod "void <init>(Object)")))))
 
 (defmethod emit-seq -invoke-
   [env context ^GeneratorAdapter gen [fun & args :as call]]
@@ -775,30 +784,39 @@
 
   (if (= context :context/return)
     (emit-tail-call env gen call)
-    (if (keyword? fun)
-      (let [fn-sym (symbol (or (namespace fun) "clojure.core") (name fun))]
-        (debug "keyword invoke: " fun)
-        (when-not (clean-resolve fn-sym)
-          (throw (IllegalArgumentException. (str "Unable to resolve clojure symbol " fn-sym))))
+    (do
+      (if (keyword? fun)
+        (let [fn-sym (symbol (or (namespace fun) "clojure.core") (name fun))]
+          (debug "keyword invoke: " fun)
+          (when-not (clean-resolve fn-sym)
+            (throw (IllegalArgumentException. (str "Unable to resolve clojure symbol " fn-sym))))
 
-        (emit-var gen fn-sym)
-        (doseq [a args]
-          (emit env :context/expression gen a))
-        (. gen invokeVirtual (asmtype clojure.lang.Var) (Method. "invoke" object-type (into-array Type (repeat (count args) object-type)))))
-      (do
-        (emit env :context/expression gen fun)
-        (. gen dup)
-        (. gen checkCast ilambda-type)
-        (AsmUtil/pushInt gen (count args))
-        (. gen invokeInterface ilambda-type (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)"))
-        (. gen swap)
+          (emit-var gen fn-sym)
+          (doseq [a args]
+            (emit env :context/expression gen a))
+          (. gen invokeVirtual (asmtype clojure.lang.Var) (Method. "invoke" object-type (into-array Type (repeat (count args) object-type)))))
+        (do
+          (emit env :context/expression gen fun)
+          (. gen dup)
+          (. gen checkCast ilambda-type)
+          (AsmUtil/pushInt gen (count args))
+          (. gen invokeInterface ilambda-type (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)"))
+          (. gen swap)
 
-        (doseq [a args]
-          (emit env :context/expression gen a))
-        (. gen invokeVirtual (asmtype MethodHandle)
-           (Method. "invoke" object-type (into-array Type (core/cons ilambda-type (repeat (count args) object-type)))))))
-    (when (= context :context/statement)
-      (. gen pop))))
+          (doseq [a args]
+            (emit env :context/expression gen a))
+          (. gen invokeVirtual (asmtype MethodHandle)
+             (Method. "invoke" object-type (into-array Type (core/cons ilambda-type (repeat (count args) object-type)))))
+         
+          (let [no-cont-label (. gen newLabel)]
+            (. gen dup)
+            (. gen instanceOf (asmtype wombat.Continuation))
+            (. gen ifZCmp GeneratorAdapter/EQ no-cont-label)
+            (. gen checkCast (asmtype wombat.Continuation))
+            (. gen invokeVirtual (asmtype wombat.Continuation) (Method/getMethod "Object invoke()"))
+            (. gen mark no-cont-label))))
+      (when (= context :context/statement)
+        (. gen pop)))))
 
 (defn compile-and-load
   ^Class [form]
@@ -806,6 +824,13 @@
   (let [[name bytecode] (compile form)]
     (.defineClass *class-loader* name bytecode form)
     (Class/forName name true *class-loader*)))
+
+(defn no-continuation-lambda
+  [form]
+  (let [gs (sanitize-name 'result)]
+    (list 'lambda ()
+          (list 'let (list (list gs form))
+                gs))))
 
 (defn eval*
   "Low-level eval call. Requires a pre-sanitized input."
@@ -820,7 +845,7 @@
    (set-global! (second form) (compile-and-load form))
 
    :else
-   (.. (compile-and-load (list 'lambda () form)) newInstance invoke)))
+   (.. (compile-and-load (no-continuation-lambda form)) newInstance invoke)))
 
 (defn eval
   "Top-level eval call. Initializes env and sanitizes input."
