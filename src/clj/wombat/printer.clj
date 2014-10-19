@@ -1,18 +1,22 @@
 (ns wombat.printer
-  (:import [java.io Writer]))
+  (:require [wombat.datatypes :refer :all])
+  (:import [java.io Writer]
+           [wombat.datatypes List Pair Vector])
+  (:refer-clojure :exclude [cons list? vector?]))
+(alias 'core 'clojure.core)
 
-(defmulti write
+(defmulti write-obj
   (fn [f w] (class f)))
 
-(defmethod write String
+(defmethod write-obj String
   [^String string ^Writer w]
   (print-method string w))
 
-(defmethod write clojure.lang.Symbol
+(defmethod write-obj clojure.lang.Symbol
   [^clojure.lang.Symbol sym ^Writer w]
   (print-method sym w))
 
-(defmethod write clojure.lang.Keyword
+(defmethod write-obj clojure.lang.Keyword
   [^clojure.lang.Keyword kw ^Writer w]
   (.write w "#")
   (print-method kw w))
@@ -20,36 +24,44 @@
 (defn write-list
   [lis ^Writer w]
   (when (seq lis)
-    (write (first lis) w)
+    (write-obj (first lis) w)
     (loop [l (rest lis)]
       (when (seq l)
         (.write w " ")
-        (write (first l) w)
+        (write-obj (first l) w)
         (recur (rest l))))))
 
-(defmethod write clojure.lang.ISeq
-  [^clojure.lang.ISeq s ^Writer w]
+(defmethod write-obj List
+  [^List lis ^Writer w]
   (.write w "(")
-  (write-list s w)
+  (write-list lis w)
   (.write w ")"))
 
-(defmethod write (class (object-array 0)) ; Scheme vector
-  [^objects svec ^Writer w]
+(defmethod write-obj Pair
+  [^Pair p ^Writer w]
+  (.write w "(")
+  (write-list (.front p) w)
+  (.write w " . ")
+  (write-obj (.end p) w)
+  (.write w ")"))
+
+(defmethod write-obj Vector
+  [^Vector vec ^Writer w]
   (.write w "#(")
-  (write-list svec w)
+  (write-list vec w)
   (.write w ")"))
 
-(defmethod write Boolean
+(defmethod write-obj Boolean
   [^Boolean b ^Writer w]
   (if b
     (.write w "#t")
     (.write w "#f")))
 
-(defmethod write nil
+(defmethod write-obj nil
   [_ ^Writer w]
   (.write w "'()"))
 
-(defmethod write Character
+(defmethod write-obj Character
   [^Character c ^Writer w]
   (let [char-names {(char 0) "null"
                     \backspace "backspace"
@@ -63,10 +75,20 @@
     (.write w "#\\")
     (.write w (get char-names c (.toString c)))))
 
-(defmethod write Number
+(defmethod write-obj Number
   [^Number n ^Writer w]
   (.write w (.toString n)))
 
-(defmethod write :default
+(defmethod write-obj :default
   [o ^Writer w]
   (print-method o w))
+
+(defn write
+  ([o] (write-obj o *out*))
+  ([o w] (write-obj o w)))
+
+(defn write-str
+  [o]
+  (let [sw (java.io.StringWriter.)]
+    (write-obj o sw)
+    (.toString sw)))

@@ -1,19 +1,31 @@
 (ns wombat.compiler
   (:require [clojure.core.match :refer [match]]
             wombat.empty
-            [wombat.reader :refer [read]])
+            [wombat.reader :refer [read]]
+            [wombat.datatypes :refer :all])
   (:import [org.objectweb.asm ClassWriter ClassVisitor Opcodes Type Handle]
            [org.objectweb.asm.commons GeneratorAdapter Method]
            [clojure.lang DynamicClassLoader Compiler RT LineNumberingPushbackReader Keyword Symbol]
            [java.lang.invoke MethodType MethodHandle MethodHandles MethodHandles$Lookup
             CallSite VolatileCallSite]
            [java.io FileReader]
+           [java.util WeakHashMap]
            [wombat ILambda AsmUtil Global])
-  (:refer-clojure :exclude [compile load-file eval read]))
+  (:refer-clojure :exclude [compile load-file eval read cons list? vector?]))
+(alias 'core 'clojure.core)
 
 ;(set! *warn-on-reflection* true)
 
 (def ^:dynamic *class-loader* (DynamicClassLoader. (RT/baseLoader)))
+;; (def ^WeakHashMap metadata (WeakHashMap.))
+
+;; (defn add-meta [o m]
+;;   (when (some? o)
+;;     (.put metadata o m)))
+;; (defn get-meta [o]
+;;   (.get metadata o))
+;; (defn carry-meta [from to]
+;;   (some->> (get-meta from) (add-meta to)))
 
 (def clean-resolve (partial ns-resolve 'wombat.empty))
 
@@ -32,11 +44,13 @@
 (def global-bindings (atom {}))
 (def ^:dynamic *current-define* nil)
 
-(def seqable?
+(defn list-like?
   "True if the given value implements clojure.lang.Seqable. Note that
   that does NOT include all types which can be seq'd. Only internal
   Clojure collection types."
-  (partial instance? clojure.lang.Seqable))
+  [o]
+  (and (instance? clojure.lang.Seqable o)
+       (not (vector? o))))
 
 (defonce -id- (atom -1))
 (defn next-id []
@@ -119,10 +133,10 @@
     (['quote val] :seq) (list 'quote val)
 
     (['lambda params & body] :seq)
-    (sanitize-lambda env form)
+    (sanitize-lambda env (seq form))
 
     (['let bindings & body] :seq)
-    (sanitize-let env form)
+    (sanitize-let env (seq form))
 
     (['define name & val] :seq)
     (list* 'define name (map (partial sanitize (assoc env name name)) val))
@@ -131,7 +145,7 @@
     form
 
     ([:jvm & insns] :seq)
-    (list* :jvm (map (partial sanitize-jvm env) insns))
+    (list* :jvm (map #(sanitize-jvm env (seq %)) insns))
 
     :else
     (map (partial sanitize env) form)))
@@ -141,7 +155,7 @@
   uniqueness."
   [env form]
   (cond
-   (seqable? form)
+   (list-like? form)
    (sanitize-seq env form)
 
    (symbol? form)
@@ -155,7 +169,7 @@
   arbitrary, but consistent."
   [form]
   (cond
-   (seqable? form)
+   (list-like? form)
    (match (seq form)
      nil (sorted-set)
 
@@ -205,7 +219,9 @@
          eval*
          eval)
 
-(defn asmtype ^Type [^Class cls] (Type/getType cls))
+(defn asmtype ^Type [cls] (if (instance? Type cls)
+                            cls
+                            (Type/getType ^Class cls)))
 (def ^Type object-type (asmtype Object))
 (def ^Type boolean-object-type (asmtype Boolean))
 (def ^Type ilambda-type (asmtype ILambda))
@@ -252,6 +268,15 @@
     (emit env :context/statement gen stmt))
   (emit env context gen (last exprs)))
 
+(defn emit-list-from-array
+  [^GeneratorAdapter gen emit-array-fn]
+  (. gen push "wombat.datatypes")
+  (. gen push "javalist->list")
+  (. gen invokeStatic (asmtype clojure.lang.RT) (Method/getMethod "clojure.lang.Var var(String,String)"))
+  (emit-array-fn)
+  (. gen invokeStatic (asmtype java.util.Arrays) (Method/getMethod "java.util.List asList(Object[])"))
+  (. gen invokeVirtual (asmtype clojure.lang.Var) (Method/getMethod "Object invoke(Object)")))
+
 (defn gen-body
   [cw {:keys [params restarg] :as env} body]
   (debug "gen-body" body)
@@ -265,37 +290,40 @@
         m (Method. "invoke" object-type (into-array Type sig))
         _ (debug "method:" m)
         gen (GeneratorAdapter. Opcodes/ACC_PUBLIC m nil nil cw)
-        rest-id (when restarg (. gen newLocal object-type))]
+        rest-id (when restarg (. gen newLocal object-type))
+        env (if restarg
+              (assoc-in env [:locals restarg] rest-id)
+              env)
+        top-label (. gen newLabel)
+        env (assoc-in env :top-label top-label)]
     (. gen visitCode)
     (when rest-id
-      (. gen loadArg (count params))
-      (. gen invokeStatic (asmtype java.util.Arrays) (Method/getMethod "java.util.List asList(Object[])"))
-      (. gen invokeStatic (asmtype clojure.lang.PersistentList) (Method/getMethod "clojure.lang.IPersistentList create(java.util.List)"))
+      (emit-list-from-array gen #(. gen loadArg (count params)))
       (. gen storeLocal rest-id))
-    (emit-body (assoc-in env [:locals restarg] rest-id) :context/return gen body)
+    (. gen mark top-label)
+    (emit-body env :context/return gen body)
     (. gen returnValue)
     (. gen endMethod)))
 
 (defn emit-array
-  [^GeneratorAdapter gen asm-type contents]
-  (AsmUtil/pushInt gen (count contents))
-  (. gen newArray asm-type)
-  (dotimes [n (count contents)]
-    (. gen dup)
-    (AsmUtil/pushInt gen n)
-    (if (fn? (nth contents n))
-      ((nth contents n))
-      (. gen push (nth contents n)))
-    (. gen arrayStore asm-type)))
+  [^GeneratorAdapter gen type contents]
+  (let [contents (seq contents)]
+    (AsmUtil/pushInt gen (count contents))
+    (. gen newArray (asmtype type))
+    (dotimes [n (count contents)]
+      (. gen dup)
+      (AsmUtil/pushInt gen n)
+      (emit-dup gen (nth contents n))
+      (. gen arrayStore (asmtype type)))))
 
 (defn method-type
   [^GeneratorAdapter gen arity restarg]
   (. gen push object-type)
-  (let [positional (repeat arity object-type)
+  (let [positional (repeat arity Object)
         sig (if restarg
-              (conj (vec positional) (asmtype object-array-class))
+              (conj (vec positional) object-array-class)
               positional)]
-    (emit-array gen (asmtype Class) sig))
+    (emit-array gen Class sig))
   (. gen invokeStatic (asmtype MethodType) (Method/getMethod "java.lang.invoke.MethodType methodType(Class,Class[])")))
 
 (defn gen-handle
@@ -323,7 +351,7 @@
 
       (. clinitgen loadLocal mt-local)
       (AsmUtil/pushInt clinitgen 0)
-      (emit-array clinitgen (asmtype Class) [ilambda-type])
+      (emit-array clinitgen Class [ILambda])
       (. clinitgen invokeVirtual (asmtype MethodType)
          (Method/getMethod "java.lang.invoke.MethodType insertParameterTypes(int,Class[])"))
 
@@ -363,7 +391,7 @@
       (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "StringBuilder append(String)"))
       (. gen loadArg 0)
       (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "StringBuilder append(int)"))
-      (. gen push (str " for " arity ")"))
+      (. gen push (str " for " arity (when restarg "+") ")"))
       (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "StringBuilder append(String)"))
       (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "String toString()"))
       (. gen invokeConstructor (asmtype IllegalArgumentException) (Method/getMethod "void <init>(String)"))
@@ -423,10 +451,10 @@
 (defn emit
   [env context gen form]
   (cond
-   (and (seqable? form) (seq form))
+   (and (list-like? form) (seq form))
    (emit-seq env context gen form)
 
-   (seqable? form) ; empty
+   (list-like? form) ; empty
    (emit-value context gen form)
 
    (symbol? form)
@@ -478,18 +506,7 @@
 (defn emit-value
   [context gen const]
   (debug "emit-value" context const)
-  (cond
-   (nil? const)
-   (. gen visitInsn Opcodes/ACONST_NULL)
-
-   (= true const)
-   (. gen getStatic boolean-object-type "TRUE" boolean-object-type)
-
-   (= false const)
-   (. gen getStatic boolean-object-type "FALSE" boolean-object-type)
-
-   :else
-   (emit-dup gen const))
+  (emit-dup gen const)
   (when (= context :context/statement)
     (. gen pop)))
 
@@ -499,6 +516,16 @@
 (defmethod emit-dup :default
   [_ obj]
   (throw (IllegalArgumentException. (str "cannot emit-dup of " obj))))
+
+(defmethod emit-dup nil
+  [^GeneratorAdapter gen _]
+  (. gen visitInsn Opcodes/ACONST_NULL))
+
+(defmethod emit-dup Boolean
+  [^GeneratorAdapter gen ^Boolean b]
+  (if b
+    (. gen getStatic boolean-object-type "TRUE" boolean-object-type)
+    (. gen getStatic boolean-object-type "FALSE" boolean-object-type)))
 
 (defmethod emit-dup Class
   [^GeneratorAdapter gen ^Class class]
@@ -544,33 +571,52 @@
 (defmethod emit-dup Symbol
   [^GeneratorAdapter gen ^Symbol sym]
   (debug "emit-dup symbol" sym)
-  (emit-value :context/expression gen (namespace sym))
-  (emit-value :context/expression gen (name sym))
+  (emit-dup gen (namespace sym))
+  (emit-dup gen (name sym))
   (. gen invokeStatic (asmtype Symbol) (Method/getMethod "clojure.lang.Symbol intern(String,String)")))
 
 (defmethod emit-dup clojure.lang.Keyword
   [^GeneratorAdapter gen ^clojure.lang.Keyword kw]
   (debug "emit-dup keyword" kw)
-  (emit-value :context/expression gen (namespace kw))
-  (emit-value :context/expression gen (name kw))
+  (emit-dup gen (namespace kw))
+  (emit-dup gen (name kw))
   (. gen invokeStatic (asmtype clojure.lang.Keyword) (Method/getMethod "clojure.lang.Keyword intern(String,String)")))
 
 (defmethod emit-dup clojure.lang.Seqable
   [^GeneratorAdapter gen ^clojure.lang.Seqable lis]
   (debug "emit-dup list" lis)
-  (emit-array gen object-type (map #(fn [] (emit-value :context/expression gen %)) lis))
-  (. gen invokeStatic (asmtype java.util.Arrays) (Method/getMethod "java.util.List asList(Object[])"))
-  (. gen invokeStatic (asmtype clojure.lang.PersistentList) (Method/getMethod "clojure.lang.IPersistentList create(java.util.List)")))
+  (emit-list-from-array gen #(emit-array gen Object lis)))
+
+(defmethod emit-dup wombat.datatypes.Vector
+  [^GeneratorAdapter gen ^wombat.datatypes.Vector v]
+  (debug "emit-dup vector")
+  (. gen newInstance (asmtype wombat.datatypes.Vector))
+  (. gen dup)
+  (emit-array gen Object v)
+  (. gen invokeConstructor (asmtype wombat.datatypes.Vector) (Method/getMethod "void <init>(Object)")))
+
+(defmethod emit-dup wombat.datatypes.Pair
+  [^GeneratorAdapter gen ^wombat.datatypes.Pair p]
+  (debug "emit-dup pair")
+  (. gen newInstance (asmtype wombat.datatypes.Pair))
+  (. gen dup)
+  (emit-dup gen (.front p))
+  (emit-dup gen (.end p))
+  (. gen invokeConstructor (asmtype wombat.datatypes.Pair) (Method/getMethod "void <init>(Object,Object)")))
+
+(prefer-method emit-dup wombat.datatypes.Vector clojure.lang.Seqable)
 
 (defmethod emit-dup object-array-class
   [^GeneratorAdapter gen ^objects ary]
   (debug "emit-dup Object[]")
-  (emit-array gen object-type (map #(fn [] (emit-value :context/expression gen %)) ary)))
-
+  (emit-array gen Object ary))
 
 (defonce -invoke- (Object.))
 (defmulti emit-seq
-  (fn [_ _ _ form] (first form))
+  (fn [_ _ _ form]
+    (if (instance? wombat.datatypes.ICons form)
+      (-car form)
+      (first form)))
   :default -invoke-)
 
 (defmethod emit-seq 'lambda
@@ -740,11 +786,11 @@
   [form]
   (debug "EVAL*: " form)
   (cond
-   (and (seqable? form) (= (first form) 'define))
+   (and (list-like? form) (= (first form) 'define))
    (binding [*current-define* (second form)]
      (set-global! (second form) (eval* (first (nnext form)))))
 
-   (and (seqable? form) (= (first form) 'define-class*))
+   (and (list-like? form) (= (first form) 'define-class*))
    (set-global! (second form) (compile-and-load form))
 
    :else

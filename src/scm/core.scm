@@ -6,15 +6,22 @@
 
 (define car
   (lambda (lis)
-    (#:clojure.core/first lis)))
+    (#:wombat.datatypes/car lis)))
 
 (define cdr
   (lambda (lis)
-    (#:clojure.core/next lis)))
+    (#:wombat.datatypes/cdr lis)))
 
 (define cons
   (lambda (a d)
-    (#:clojure.core/conj d a)))
+    (#:wombat.datatypes/cons a d)))
+
+(define eqv?
+  (lambda (a b)
+    (#:jvm (#:emit a)
+           (#:emit b)
+           (invokeVirtual Object (boolean "equals" Object))
+           (box boolean))))
 
 (define namespace
   (lambda (named)
@@ -52,8 +59,10 @@
 
 (define class
   (lambda (obj)
-    (#:jvm (#:emit obj)
-           (invokeVirtual Object (Class "getClass")))))
+    (if (null? obj)
+      '()
+      (#:jvm (#:emit obj)
+             (invokeVirtual Object (Class "getClass"))))))
 
 (define instance?
   (lambda (cls o)
@@ -83,13 +92,6 @@
   (lambda (form)
     (#:wombat.compiler/eval* form)))
 
-(define eqv?
-  (lambda (a b)
-    (#:jvm (#:emit a)
-           (#:emit b)
-           (invokeVirtual Object (boolean "equals" Object))
-           (box boolean))))
-
 (define gensym
   (lambda ()
     (string->symbol (conc "G__#" (str (#:wombat.compiler/next-id))))))
@@ -102,15 +104,15 @@
 
 (define foldl
   (lambda (f init vals)
-    (if (#:seq vals)
-      (foldl f (f (car vals) init) (cdr vals))
-      init)))
+    (if (null? vals)
+      init
+      (foldl f (f (car vals) init) (cdr vals)))))
 
 (define foldr
   (lambda (f init vals)
-    (if (#:seq vals)
-      (f (car vals) (foldr f init (cdr vals)))
-      init)))
+    (if (null? vals)
+      init
+      (f (car vals) (foldr f init (cdr vals))))))
 
 (define define-record
   (lambda (rname fields)

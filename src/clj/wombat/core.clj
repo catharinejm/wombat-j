@@ -4,13 +4,17 @@
             [wombat.printer :refer [write]])
   (:import [java.lang.invoke MethodHandles CallSite]))
 
-(defn bootstrap []
-  (try (compiler/load-file "src/scm/core.scm")
-       (catch Exception e
-         (binding [*out* *err*]
-           (println "bootstrap failed...")
-           (println (.getMessage e))
-           (.printStackTrace e)))))
+(defn bootstrap
+  ([] (bootstrap false))
+  ([throw?]
+     (try (compiler/load-file "src/scm/core.scm")
+          (catch Exception e
+            (if throw?
+              (throw e)
+              (binding [*out* *err*]
+                (println "bootstrap failed...")
+                (println (.getMessage e))
+                (.printStackTrace e *out*)))))))
 
 (defn print-exception
   [^Exception e]

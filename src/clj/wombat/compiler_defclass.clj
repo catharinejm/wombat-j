@@ -38,7 +38,7 @@
 (defmethod emit-jvm :invoke
   [env context ^GeneratorAdapter gen [_ fun & args :as form]]
   (assert-min-arity! form 1)
-  (emit-seq env :context/expression gen (cons fun args)))
+  (emit-seq env :context/expression gen (core/cons fun args)))
 
 (defn add-label
   [{labels :labels} ^GeneratorAdapter gen lname]
@@ -78,7 +78,7 @@
 
 (defn maybe-prim-resolve
   [sym]
-  (if (and (seqable? sym) (= (count sym) 1))
+  (if (and (list-like? sym) (= (count sym) 1))
     (class (make-array (maybe-prim-resolve (first sym)) 0))
     (condp = sym
       'int Integer/TYPE
@@ -128,17 +128,17 @@
 (defmethod emit-jvm 'invokeInterface
   [env context ^GeneratorAdapter gen [_ owner sig :as form]]
   (assert-arity! form 2)
-  (. gen invokeInterface (resolve-asm owner) (method sig)))
+  (. gen invokeInterface (resolve-asm owner) (method (seq sig))))
 
 (defmethod emit-jvm 'invokeStatic
   [env context ^GeneratorAdapter gen [_ owner sig :as form]]
   (assert-arity! form 2)
-  (. gen invokeStatic (resolve-asm owner) (method sig)))
+  (. gen invokeStatic (resolve-asm owner) (method (seq sig))))
 
 (defmethod emit-jvm 'invokeVirtual
   [env context ^GeneratorAdapter gen [_ owner sig :as form]]
   (assert-arity! form 2)
-  (. gen invokeVirtual (resolve-asm owner) (method sig)))
+  (. gen invokeVirtual (resolve-asm owner) (method (seq sig))))
 
 (defmethod emit-jvm 'box
   [env context ^GeneratorAdapter gen [_ type :as form]]
@@ -191,7 +191,7 @@
                             (throw (IllegalArgumentException. (str "invalid field name: " sym))))
             sym)
           (parse [f]
-            (if (seqable? f)
+            (if (list-like? f)
               (parse-seq f)
               (let [sym (validate! f)]
                 {:sym sym :name (munge (name sym)) :type Object :modifiers ['public]})))

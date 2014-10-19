@@ -1,9 +1,11 @@
 (ns wombat.reader
-  (:require [clojure.java.io :as io])
+  (:require [clojure.java.io :as io]
+            [wombat.datatypes :as wd :refer [javalist->list]])
   (:import [clojure.lang LineNumberingPushbackReader LispReader$ReaderException
             PersistentList Symbol Keyword]
            [java.io FileReader Reader]
-           [java.util List ArrayList])
+           [java.util ArrayList]
+           [wombat.datatypes List Pair Vector])
   (:refer-clojure :exclude [read]))
 
 (defn ^LispReader$ReaderException reader-exception
@@ -185,7 +187,7 @@
        (unread rdr c)
        (list 'quote (read* rdr true nil true))))))
 
-(defn ^List read-to-delimiter
+(defn ^java.util.List read-to-delimiter
   [^LineNumberingPushbackReader rdr close-delim]
   (let [start-line (.getLineNumber rdr)
         lis (ArrayList.)]
@@ -218,6 +220,23 @@
   [rdr delim]
   (throw (RuntimeException. (str "Unmatched delimiter: " (char delim)))))
 
+(defn interpret-list
+  [^java.util.List lis]
+  (if (.isEmpty lis)
+    nil
+    (if (> (.size lis) 2)
+      (let [end (.get lis (dec (.size lis)))
+            dot? (.get lis (- (.size lis) 2))]
+        (when (= end '.)
+          (throw (IllegalArgumentException. "Unexpected `.' in list!")))
+        (if (= dot? '.)
+          (let [sublis (.subList lis 0 (- (.size lis) 2))]
+            (if (wd/list? end)
+              (javalist->list sublis end true)
+              (Pair. (javalist->list sublis true) end)))
+          (javalist->list lis true)))
+      (javalist->list lis true))))
+
 (defmethod read-form :list
   [^LineNumberingPushbackReader rdr c]
   (let [close-delim ({\( \), \[ \], \{ \}} (char c))]
@@ -225,12 +244,10 @@
       (throw (RuntimeException. (str "Unmatchable list delimiter: " (char c)))))
     (let [line (.getLineNumber rdr)
           col (dec (.getColumnNumber rdr))
-          lis (read-to-delimiter rdr close-delim)]
-      (if (.isEmpty lis)
-        nil
-        (with-meta (PersistentList/create lis)
-          (when-not (= line -1)
-            {:line line :column col}))))))
+          lis (interpret-list (read-to-delimiter rdr close-delim))]
+      ;; (when (and lis (> line -1))
+      ;;   (add-meta lis {:line line :column col}))
+      lis)))
 
 (defmethod read-form :comment
   [^LineNumberingPushbackReader rdr c]
@@ -287,7 +304,7 @@
 (defmethod read-dispatch-form :vector
   [^LineNumberingPushbackReader rdr c]
   (let [lis (read-to-delimiter rdr \) )]
-    (.toArray lis)))
+    (Vector. (.toArray lis))))
 
 (defmethod read-dispatch-form :discard
   [^LineNumberingPushbackReader rdr c]
