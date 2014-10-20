@@ -52,29 +52,17 @@
       (add-label env gen lname)))
 
 (defmethod emit-jvm 'ifNull
-  [{:keys [labels] :as env} context ^GeneratorAdapter gen [_ lname :as form]]
+  [env context ^GeneratorAdapter gen [_ lname :as form]]
   (assert-arity! form 1)
   (. gen ifNull (label env gen lname)))
 
-(defmethod emit-jvm 'label
-  [{:keys [labels] :as env} context ^GeneratorAdapter gen [_ lname :as form]]
-  (assert-arity! form 1)
-  (. gen mark (label env gen lname)))
-
-(defmethod emit-jvm 'goTo
-  [{:keys [labels] :as env} context ^GeneratorAdapter gen [_ lname :as form]]
-  (assert-arity! form 1)
-  (. gen goTo (label env gen lname)))
-
-(defmethod emit-jvm 'checkCast
-  [env context ^GeneratorAdapter gen [_ class :as form]]
-  (assert-arity! form 1)
-  (. gen checkCast (asmtype (clean-resolve class))))
-
-(defmethod emit-jvm 'loadThis
-  [env context ^GeneratorAdapter gen form]
-  (assert-arity! form 0)
-  (. gen loadThis))
+(def cmp-ops
+  {'= GeneratorAdapter/EQ
+   'not= GeneratorAdapter/NE
+   '< GeneratorAdapter/LT
+   '<= GeneratorAdapter/LE
+   '> GeneratorAdapter/GT
+   '>= GeneratorAdapter/GE})
 
 (defn maybe-prim-resolve
   [sym]
@@ -103,6 +91,33 @@
 (defn resolve-asm
   [cls]
   (asmtype (maybe-prim-resolve cls)))
+
+(defmethod emit-jvm 'ifCmp
+  [env context ^GeneratorAdapter gen [_ type op lname :as form]]
+  (assert-arity! form 3)
+  (when-not (contains? cmp-ops op)
+    (throw (IllegalArgumentException. (str "Invalid comparison op: " op))))
+  (. gen ifCmp (resolve-asm type) (cmp-ops op) (label env gen lname)))
+
+(defmethod emit-jvm 'label
+  [{:keys [labels] :as env} context ^GeneratorAdapter gen [_ lname :as form]]
+  (assert-arity! form 1)
+  (. gen mark (label env gen lname)))
+
+(defmethod emit-jvm 'goTo
+  [{:keys [labels] :as env} context ^GeneratorAdapter gen [_ lname :as form]]
+  (assert-arity! form 1)
+  (. gen goTo (label env gen lname)))
+
+(defmethod emit-jvm 'checkCast
+  [env context ^GeneratorAdapter gen [_ class :as form]]
+  (assert-arity! form 1)
+  (. gen checkCast (asmtype (clean-resolve class))))
+
+(defmethod emit-jvm 'loadThis
+  [env context ^GeneratorAdapter gen form]
+  (assert-arity! form 0)
+  (. gen loadThis))
 
 (defn method
   [[ret name & params]]
@@ -171,6 +186,66 @@
     '#{Class java.lang.Class} (. gen push (resolve-asm val))
     '#{String java.lang.String} (. gen push (cast String val))
     (throw (IllegalArgumentException. (str "Cannot push type " type)))))
+
+(defmethod emit-jvm 'add
+  [env context ^GeneratorAdapter gen [_ type :as form]]
+  (assert-arity! form 1)
+  (. gen math GeneratorAdapter/ADD (resolve-asm type)))
+
+(defmethod emit-jvm 'sub
+  [env context ^GeneratorAdapter gen [_ type :as form]]
+  (assert-arity! form 1)
+  (. gen math GeneratorAdapter/SUB (resolve-asm type)))
+
+(defmethod emit-jvm 'mul
+  [env context ^GeneratorAdapter gen [_ type :as form]]
+  (assert-arity! form 1)
+  (. gen math GeneratorAdapter/MUL (resolve-asm type)))
+
+(defmethod emit-jvm 'div
+  [env context ^GeneratorAdapter gen [_ type :as form]]
+  (assert-arity! form 1)
+  (. gen math GeneratorAdapter/DIV (resolve-asm type)))
+
+(defmethod emit-jvm 'rem
+  [env context ^GeneratorAdapter gen [_ type :as form]]
+  (assert-arity! form 1)
+  (. gen math GeneratorAdapter/REM (resolve-asm type)))
+
+(defmethod emit-jvm 'neg
+  [env context ^GeneratorAdapter gen [_ type :as form]]
+  (assert-arity! form 1)
+  (. gen math GeneratorAdapter/NEG (resolve-asm type)))
+
+(defmethod emit-jvm 'shl
+  [env context ^GeneratorAdapter gen [_ type :as form]]
+  (assert-arity! form 1)
+  (. gen math GeneratorAdapter/SHL (resolve-asm type)))
+
+(defmethod emit-jvm 'shr
+  [env context ^GeneratorAdapter gen [_ type :as form]]
+  (assert-arity! form 1)
+  (. gen math GeneratorAdapter/SHR (resolve-asm type)))
+
+(defmethod emit-jvm 'ushr
+  [env context ^GeneratorAdapter gen [_ type :as form]]
+  (assert-arity! form 1)
+  (. gen math GeneratorAdapter/USHR (resolve-asm type)))
+
+(defmethod emit-jvm 'and
+  [env context ^GeneratorAdapter gen [_ type :as form]]
+  (assert-arity! form 1)
+  (. gen math GeneratorAdapter/AND (resolve-asm type)))
+
+(defmethod emit-jvm 'or
+  [env context ^GeneratorAdapter gen [_ type :as form]]
+  (assert-arity! form 1)
+  (. gen math GeneratorAdapter/OR (resolve-asm type)))
+
+(defmethod emit-jvm 'xor
+  [env context ^GeneratorAdapter gen [_ type :as form]]
+  (assert-arity! form 1)
+  (. gen math GeneratorAdapter/XOR (resolve-asm type)))
 
 (defn plain-sym?
   [sym]

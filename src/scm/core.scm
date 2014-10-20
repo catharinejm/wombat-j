@@ -72,6 +72,30 @@
            (invokeVirtual Class (boolean "isInstance" Object))
            (box boolean))))
 
+(define add1
+  (lambda (n)
+    (#:jvm (#:emit n)
+           (checkCast Number)
+           (invokeVirtual Number (long "longValue"))
+           (push long 1)
+           (add long)
+           (box long))))
+
+(define <
+  (lambda (x y)
+    (#:jvm (#:emit x)
+           (checkCast Number)
+           (invokeVirtual Number (long "longValue"))
+           (#:emit y)
+           (checkCast Number)
+           (invokeVirtual Number (long "longValue"))
+           (ifCmp long < #:is-less)
+           (#:emit #f)
+           (goTo #:end)
+           (label #:is-less)
+           (#:emit #t)
+           (label #:end))))
+
 (define string->symbol
   (lambda (str)
     (#:jvm (#:emit str)

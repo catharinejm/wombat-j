@@ -757,6 +757,7 @@
   (if (= fun recur-sym)
                                         ; Self call, becomes loop
     (do
+      (debug "emitting self tail-call: " call)
       (when (or (and restarg (not (>= (count args) (count params))))
                 (not= (count args) (count params)))
         (throw (IllegalArgumentException.
