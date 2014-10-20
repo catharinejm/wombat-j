@@ -43,6 +43,9 @@
 
 (def global-bindings (atom {}))
 (def ^:dynamic *current-define* nil)
+(def ^:dynamic *lambda-name* nil)
+(def ^:dynamic *top-level* nil)
+(def ^:dynamic *return-continuation* nil)
 
 (defn list-like?
   "True if the given value implements clojure.lang.Seqable. Note that
@@ -425,7 +428,7 @@
     (debug "Compiling:" lambda)
     (let [fv (vec (free-vars lambda))
           cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
-          lname (str "lambda_" (next-id))
+          lname (str (or *lambda-name* "lambda") "_" (next-id))
           fqname (str "wombat/" lname)
           _ (debug "fqname:" fqname)
           dotname (.replace fqname "/" ".")
@@ -435,15 +438,16 @@
           env {:params (take-while before-rest params)
                :closed-overs fv
                :locals {}
-               :recur-sym *current-define* ;; TODO: Enable named lambdas
+               :recur-sym *lambda-name* ;; TODO: Enable named lambdas
                :thistype (Type/getObjectType fqname)
                :restarg restarg}]
-      (. cw visit Opcodes/V1_7 Opcodes/ACC_PUBLIC fqname nil "java/lang/Object" ifaces)
-      (gen-closure-fields cw fv)
-      (gen-ctor cw fqname fv)
-      (gen-body cw env body)
-      (gen-handle cw env)
-      (. cw visitEnd)
+      (binding [*lambda-name* (if *top-level* *lambda-name* nil)]
+        (. cw visit Opcodes/V1_7 Opcodes/ACC_PUBLIC fqname nil "java/lang/Object" ifaces)
+        (gen-closure-fields cw fv)
+        (gen-ctor cw fqname fv)
+        (gen-body cw env body)
+        (gen-handle cw env)
+        (. cw visitEnd))
       (swap! *compiled-lambdas* conj lambda)
       [dotname (.toByteArray cw) fv])))
 
@@ -621,7 +625,8 @@
 (defmethod emit-seq 'lambda
   [env context ^GeneratorAdapter gen [_ params & body :as lambda]]
   (when-not (= context :context/statement)
-    (let [[dotname bytecode closed-overs] (compile lambda)]
+    (let [[dotname bytecode closed-overs] (binding [*top-level* false]
+                                            (compile lambda))]
       (. *class-loader* defineClass dotname bytecode lambda)
       (let [slashname (.replace dotname "." "/")]
         (. gen newInstance (Type/getObjectType slashname))
@@ -773,7 +778,9 @@
     (do
       (. gen newInstance (asmtype wombat.Continuation))
       (. gen dup)
-      (emit env :context/expression gen (no-continuation-lambda call))
+      (binding [*lambda-name* (str recur-sym "_CONT")
+                *return-continuation* true]
+        (emit env :context/expression gen (no-continuation-lambda call)))
       (. gen invokeConstructor (asmtype wombat.Continuation) (Method/getMethod "void <init>(Object)")))))
 
 (defmethod emit-seq -invoke-
@@ -809,22 +816,27 @@
           (. gen invokeVirtual (asmtype MethodHandle)
              (Method. "invoke" object-type (into-array Type (core/cons ilambda-type (repeat (count args) object-type)))))
          
-          (let [no-cont-label (. gen newLabel)]
-            (. gen dup)
-            (. gen instanceOf (asmtype wombat.Continuation))
-            (. gen ifZCmp GeneratorAdapter/EQ no-cont-label)
-            (. gen checkCast (asmtype wombat.Continuation))
-            (. gen invokeVirtual (asmtype wombat.Continuation) (Method/getMethod "Object invoke()"))
-            (. gen mark no-cont-label))))
+          (when-not *return-continuation*
+            (let [precheck (. gen newLabel)
+                  no-cont-label (. gen newLabel)]
+              (. gen mark precheck)
+              (. gen dup)
+              (. gen instanceOf (asmtype wombat.Continuation))
+              (. gen ifZCmp GeneratorAdapter/EQ no-cont-label)
+              (. gen checkCast (asmtype wombat.Continuation))
+              (. gen invokeVirtual (asmtype wombat.Continuation) (Method/getMethod "Object invoke()"))
+              (. gen goTo precheck)
+              (. gen mark no-cont-label)))))
       (when (= context :context/statement)
         (. gen pop)))))
 
 (defn compile-and-load
   ^Class [form]
   (debug "COMPILE-AND-LOAD: " form)
-  (let [[name bytecode] (compile form)]
-    (.defineClass *class-loader* name bytecode form)
-    (Class/forName name true *class-loader*)))
+  (binding [*top-level* true]
+    (let [[name bytecode] (compile form)]
+      (.defineClass *class-loader* name bytecode form)
+      (Class/forName name true *class-loader*))))
 
 (defn no-continuation-lambda
   [form]
@@ -839,7 +851,8 @@
   (debug "EVAL*: " form)
   (cond
    (and (list-like? form) (= (first form) 'define))
-   (binding [*current-define* (second form)]
+   (binding [*current-define* (second form)
+             *lambda-name* (second form)]
      (set-global! (second form) (eval* (first (nnext form)))))
 
    (and (list-like? form) (= (first form) 'define-class*))

@@ -151,3 +151,14 @@
                                                   (list f coll))))
                                 '() fields))))))
     '()))
+
+
+(define doit2)
+(define doit
+  (lambda (n)
+    (if (< n 50000)
+      (doit2 (add1 n))
+      n)))
+(define doit2
+  (lambda (n)
+    (doit n)))
