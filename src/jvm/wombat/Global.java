@@ -11,8 +11,8 @@ import clojure.lang.Util;
 import clojure.lang.DynamicClassLoader;
 
 public class Global {
-    final static Var COMPILER_BINDINGS = RT.var("wombat.compiler", "global-bindings");
-    final static Var LOADER = RT.var("wombat.compiler", "*class-loader*");
+    public final static Var COMPILER_BINDINGS = RT.var("wombat.compiler", "global-bindings");
+    public final static Var LOADER = RT.var("wombat.compiler", "*class-loader*");
     public final static Var JAVALIST_TO_LIST = RT.var("wombat.datatypes", "javalist->list");
     
     public static CallSite bootstrap(MethodHandles.Lookup caller, String name, MethodType methodType, String symName) {

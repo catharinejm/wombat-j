@@ -134,6 +134,11 @@
   (assert-arity! form 0)
   (. gen push thistype))
 
+(defmethod emit-jvm :explode-continuation
+  [env context gen form]
+  (assert-arity! form 0)
+  (emit-explode-continuation gen))
+
 (defmethod emit-jvm 'getField
   [{thistype :thistype :as env} context ^GeneratorAdapter gen [_ name type :as form]]
   (assert-arity! form 2)

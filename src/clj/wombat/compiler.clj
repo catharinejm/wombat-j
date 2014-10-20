@@ -771,6 +771,17 @@
     (. gen mark no-cont-label)))
 
 (declare no-continuation-lambda)
+
+(defn explodey-lambda
+  [[fun & args :as call]]
+  (let [gensyms (repeatedly (count call) #(sanitize-name "GS"))
+        let-binds (map #(list %1 (list :jvm
+                                       (list :emit %2)
+                                       (list :explode-continuation)))
+                       gensyms call)]
+    (list 'lambda ()
+          (list 'let let-binds gensyms))))
+
 (defn emit-tail-call
   [{:keys [recur-sym restarg top-label params] :as env} ^GeneratorAdapter gen [fun & args :as call]]
   (if (= fun recur-sym)
@@ -803,12 +814,23 @@
                                         ; Calls another fn, return continuation thunk
     (do
       (debug "emitting continuation:" call)
-      (. gen newInstance (asmtype wombat.Continuation))
-      (. gen dup)
       (binding [*lambda-name* (symbol (str recur-sym "_CONT"))
                 *return-continuation* true]
-        (emit env :context/expression gen (no-continuation-lambda call)))
-      (. gen invokeConstructor (asmtype wombat.Continuation) (Method/getMethod "void <init>(Object)")))))
+        (emit env :context/expression gen fun)
+        (emit-explode-continuation gen)
+        (AsmUtil/pushInt gen (count args))
+        (. gen newArray object-type)
+        (dotimes [n (count args)]
+          (. gen dup)
+          (AsmUtil/pushInt gen n)
+          (emit env :context/expression gen (nth args n))
+          (emit-explode-continuation gen)
+          (. gen arrayStore object-type))
+        (. gen newInstance (asmtype wombat.Continuation))
+        (. gen dupX2)
+        (. gen dupX2)
+        (. gen pop)
+        (. gen invokeConstructor (asmtype wombat.Continuation) (Method/getMethod "void <init>(Object,Object[])"))))))
 
 (defn emit-invoke
   [env context ^GeneratorAdapter gen [fun & args :as call]]
