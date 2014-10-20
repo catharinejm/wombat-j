@@ -329,6 +329,7 @@
 
 (defn gen-handle
   [cw {:keys [params restarg ^Type thistype] :as env}]
+  (debug "gen-handle" thistype)
   (let [^ClassVisitor cv cw
         arity (count params)
         handle (handle-name arity restarg)]
@@ -428,7 +429,7 @@
     (debug "Compiling:" lambda)
     (let [fv (vec (free-vars lambda))
           cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
-          lname (str (or *lambda-name* "lambda") "_" (next-id))
+          lname (str (dotmunge (str (or *lambda-name* 'lambda))) "_" (next-id))
           fqname (str "wombat/" lname)
           _ (debug "fqname:" fqname)
           dotname (.replace fqname "/" ".")
@@ -756,6 +757,19 @@
     (doseq [i insns]
       (emit-jvm labeled-env context gen i))))
 
+(defn emit-explode-continuation
+  [^GeneratorAdapter gen]
+  (let [precheck (. gen newLabel)
+        no-cont-label (. gen newLabel)]
+    (. gen mark precheck)
+    (. gen dup)
+    (. gen instanceOf (asmtype wombat.Continuation))
+    (. gen ifZCmp GeneratorAdapter/EQ no-cont-label)
+    (. gen checkCast (asmtype wombat.Continuation))
+    (. gen invokeVirtual (asmtype wombat.Continuation) (Method/getMethod "Object invoke()"))
+    (. gen goTo precheck)
+    (. gen mark no-cont-label)))
+
 (declare no-continuation-lambda)
 (defn emit-tail-call
   [{:keys [recur-sym restarg top-label params] :as env} ^GeneratorAdapter gen [fun & args :as call]]
@@ -767,65 +781,74 @@
                 (not= (count args) (count params)))
         (throw (IllegalArgumentException.
                 (str "Wrong number of args (" (count args) " for " (count params) (when restarg "+") ")"))))
+                                        ; emit all new values
       (dotimes [n (count params)]
         (emit env :context/expression gen (nth args n))
-        (. gen storeArg n))
-      (when-let [extra (seq (drop (count params) args))]
-        (emit-array gen Object extra)
-        (. gen storeArg (count params)))
+        ;;(emit-explode-continuation gen)
+        )
+      (when restarg
+        (let [extra (seq (drop (count params) args))]
+          (AsmUtil/pushInt gen (count extra))
+          (. gen newArray object-type)
+          (dotimes [n (count extra)]
+            (. gen dup)
+            (AsmUtil/pushInt gen n)
+            (emit env :context/expression gen (nth extra n))
+            ;;(emit-explode-continuation gen)
+            (. gen arrayStore object-type))))
+                                        ; store them in reverse order from stack
+      (dotimes [n (count params)]
+        (. gen storeArg (- (count params) n (if restarg 0 1))))
       (. gen goTo top-label))
                                         ; Calls another fn, return continuation thunk
     (do
       (debug "emitting continuation:" call)
       (. gen newInstance (asmtype wombat.Continuation))
       (. gen dup)
-      (binding [*lambda-name* (str recur-sym "_CONT")
+      (binding [*lambda-name* (symbol (str recur-sym "_CONT"))
                 *return-continuation* true]
         (emit env :context/expression gen (no-continuation-lambda call)))
       (. gen invokeConstructor (asmtype wombat.Continuation) (Method/getMethod "void <init>(Object)")))))
 
 (defn emit-invoke
   [env context ^GeneratorAdapter gen [fun & args :as call]]
-  (if (keyword? fun)
-    (let [fn-sym (symbol (or (namespace fun) "clojure.core") (name fun))]
-      (debug "keyword invoke: " fun)
-      (when-not (clean-resolve fn-sym)
-        (throw (IllegalArgumentException. (str "Unable to resolve clojure symbol " fn-sym))))
+  (let [return-cont *return-continuation*]
+    (binding [;*return-continuation* false
+              ]
+     (if (keyword? fun)
+       (let [fn-sym (symbol (or (namespace fun) "clojure.core") (name fun))]
+         (debug "keyword invoke: " fun)
+         (when-not (clean-resolve fn-sym)
+           (throw (IllegalArgumentException. (str "Unable to resolve clojure symbol " fn-sym))))
 
-      (emit-var gen fn-sym)
-      (doseq [a args]
-        (emit env :context/expression gen a))
-      (. gen invokeVirtual (asmtype clojure.lang.Var) (Method. "invoke" object-type (into-array Type (repeat (count args) object-type)))))
-    (let [ret-cont *return-continuation*]
-      (binding [*return-continuation* nil]
-        (emit env :context/expression gen fun)
-        (. gen dup)
-        (. gen checkCast ilambda-type)
-        (AsmUtil/pushInt gen (count args))
-        (. gen invokeInterface ilambda-type (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)"))
-        (. gen swap)
+         (emit-var gen fn-sym)
+         (doseq [a args]
+           (emit env :context/expression gen a)
+           ;;(emit-explode-continuation gen)
+           )
+         (. gen invokeVirtual (asmtype clojure.lang.Var) (Method. "invoke" object-type (into-array Type (repeat (count args) object-type)))))
+       (do
+         (emit env :context/expression gen fun)
+         (. gen dup)
+         (. gen checkCast ilambda-type)
+         (AsmUtil/pushInt gen (count args))
+         (. gen invokeInterface ilambda-type (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)"))
+         (. gen swap)
 
-        (doseq [a args]
-          (emit env :context/expression gen a))
-        (. gen invokeVirtual (asmtype MethodHandle)
-           (Method. "invoke" object-type (into-array Type (core/cons ilambda-type (repeat (count args) object-type)))))
-        
-        (when-not ret-cont
-          (debug "*** NOT RETURNING CONTINUATION" call)
-          (let [precheck (. gen newLabel)
-                no-cont-label (. gen newLabel)]
-            (. gen mark precheck)
-            (. gen dup)
-            (. gen instanceOf (asmtype wombat.Continuation))
-            (. gen ifZCmp GeneratorAdapter/EQ no-cont-label)
-            (. gen checkCast (asmtype wombat.Continuation))
-            (. gen invokeVirtual (asmtype wombat.Continuation) (Method/getMethod "Object invoke()"))
-            (. gen goTo precheck)
-            (. gen mark no-cont-label)))
-        (when ret-cont
-          (debug "*** RETURNING CONTINUATION" call)))))
-  (when (= context :context/statement)
-    (. gen pop)))
+         (doseq [a args]
+           (emit env :context/expression gen a)
+           ;;(emit-explode-continuation gen)
+           )
+         (. gen invokeVirtual (asmtype MethodHandle)
+            (Method. "invoke" object-type (into-array Type (core/cons ilambda-type (repeat (count args) object-type)))))
+      
+         (when-not return-cont
+           (debug "*** NOT RETURNING CONTINUATION" call)
+           (emit-explode-continuation gen))
+         (when return-cont
+           (debug "*** RETURNING CONTINUATION" call))))
+     (when (= context :context/statement)
+       (. gen pop)))))
 
 (defmethod emit-seq -invoke-
   [env context ^GeneratorAdapter gen [fun & args :as call]]

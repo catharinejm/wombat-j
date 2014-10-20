@@ -131,11 +131,44 @@
            (#:emit #t)
            (label #:end))))
 
+(define print
+  (lambda (o)
+    (#:print o)))
+
+(define obj->str
+  (lambda (o)
+    (#:wombat.printer/write-str o)))
+
+(define fib-print
+  (lambda (n m x y)
+    (print "******\n")
+    (print "n: ")
+    (print (obj->str n))
+    (print "\n")
+    (print "m: ")
+    (print (obj->str m))
+    (print "\n")
+    (print "x: ")
+    (print (obj->str x))
+    (print "\n")
+    (print "y: ")
+    (print (obj->str y))
+    (print "\n\n")
+    (if (< n m)
+      (fib-print (add1 n) m y (+ y x))
+      y)))
+
 (define fib
   (lambda (n)
     (if (< n 2)
       1
       (+ (fib (sub1 n)) n))))
+
+(define fib*
+  (lambda (n m x y)
+    (if (< n m)
+      (fib* (add1 n) m y (+ x y))
+      y)))
 
 (define string->symbol
   (lambda (str)
@@ -179,6 +212,7 @@
       init
       (f (car vals) (foldr f init (cdr vals))))))
 
+#;
 (define define-record
   (lambda (rname fields)
     (#:wombat.compiler/set-global!
@@ -197,7 +231,7 @@
 (define doit2)
 (define doit
   (lambda (n)
-    (if (< n 50000)
+    (if (< n 1000000)
       (doit2 (add1 n))
       n)))
 (define doit2
