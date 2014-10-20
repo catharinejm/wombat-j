@@ -763,7 +763,7 @@
                                         ; Self call, becomes loop
     (do
       (debug "emitting self tail-call: " call)
-      (when (or (and restarg (not (>= (count args) (count params))))
+      (when (or (and restarg (< (count args) (count params)))
                 (not= (count args) (count params)))
         (throw (IllegalArgumentException.
                 (str "Wrong number of args (" (count args) " for " (count params) (when restarg "+") ")"))))
@@ -776,12 +776,56 @@
       (. gen goTo top-label))
                                         ; Calls another fn, return continuation thunk
     (do
+      (debug "emitting continuation:" call)
       (. gen newInstance (asmtype wombat.Continuation))
       (. gen dup)
       (binding [*lambda-name* (str recur-sym "_CONT")
                 *return-continuation* true]
         (emit env :context/expression gen (no-continuation-lambda call)))
       (. gen invokeConstructor (asmtype wombat.Continuation) (Method/getMethod "void <init>(Object)")))))
+
+(defn emit-invoke
+  [env context ^GeneratorAdapter gen [fun & args :as call]]
+  (if (keyword? fun)
+    (let [fn-sym (symbol (or (namespace fun) "clojure.core") (name fun))]
+      (debug "keyword invoke: " fun)
+      (when-not (clean-resolve fn-sym)
+        (throw (IllegalArgumentException. (str "Unable to resolve clojure symbol " fn-sym))))
+
+      (emit-var gen fn-sym)
+      (doseq [a args]
+        (emit env :context/expression gen a))
+      (. gen invokeVirtual (asmtype clojure.lang.Var) (Method. "invoke" object-type (into-array Type (repeat (count args) object-type)))))
+    (let [ret-cont *return-continuation*]
+      (binding [*return-continuation* nil]
+        (emit env :context/expression gen fun)
+        (. gen dup)
+        (. gen checkCast ilambda-type)
+        (AsmUtil/pushInt gen (count args))
+        (. gen invokeInterface ilambda-type (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)"))
+        (. gen swap)
+
+        (doseq [a args]
+          (emit env :context/expression gen a))
+        (. gen invokeVirtual (asmtype MethodHandle)
+           (Method. "invoke" object-type (into-array Type (core/cons ilambda-type (repeat (count args) object-type)))))
+        
+        (when-not ret-cont
+          (debug "*** NOT RETURNING CONTINUATION" call)
+          (let [precheck (. gen newLabel)
+                no-cont-label (. gen newLabel)]
+            (. gen mark precheck)
+            (. gen dup)
+            (. gen instanceOf (asmtype wombat.Continuation))
+            (. gen ifZCmp GeneratorAdapter/EQ no-cont-label)
+            (. gen checkCast (asmtype wombat.Continuation))
+            (. gen invokeVirtual (asmtype wombat.Continuation) (Method/getMethod "Object invoke()"))
+            (. gen goTo precheck)
+            (. gen mark no-cont-label)))
+        (when ret-cont
+          (debug "*** RETURNING CONTINUATION" call)))))
+  (when (= context :context/statement)
+    (. gen pop)))
 
 (defmethod emit-seq -invoke-
   [env context ^GeneratorAdapter gen [fun & args :as call]]
@@ -792,43 +836,7 @@
 
   (if (= context :context/return)
     (emit-tail-call env gen call)
-    (do
-      (if (keyword? fun)
-        (let [fn-sym (symbol (or (namespace fun) "clojure.core") (name fun))]
-          (debug "keyword invoke: " fun)
-          (when-not (clean-resolve fn-sym)
-            (throw (IllegalArgumentException. (str "Unable to resolve clojure symbol " fn-sym))))
-
-          (emit-var gen fn-sym)
-          (doseq [a args]
-            (emit env :context/expression gen a))
-          (. gen invokeVirtual (asmtype clojure.lang.Var) (Method. "invoke" object-type (into-array Type (repeat (count args) object-type)))))
-        (do
-          (emit env :context/expression gen fun)
-          (. gen dup)
-          (. gen checkCast ilambda-type)
-          (AsmUtil/pushInt gen (count args))
-          (. gen invokeInterface ilambda-type (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)"))
-          (. gen swap)
-
-          (doseq [a args]
-            (emit env :context/expression gen a))
-          (. gen invokeVirtual (asmtype MethodHandle)
-             (Method. "invoke" object-type (into-array Type (core/cons ilambda-type (repeat (count args) object-type)))))
-         
-          (when-not *return-continuation*
-            (let [precheck (. gen newLabel)
-                  no-cont-label (. gen newLabel)]
-              (. gen mark precheck)
-              (. gen dup)
-              (. gen instanceOf (asmtype wombat.Continuation))
-              (. gen ifZCmp GeneratorAdapter/EQ no-cont-label)
-              (. gen checkCast (asmtype wombat.Continuation))
-              (. gen invokeVirtual (asmtype wombat.Continuation) (Method/getMethod "Object invoke()"))
-              (. gen goTo precheck)
-              (. gen mark no-cont-label)))))
-      (when (= context :context/statement)
-        (. gen pop)))))
+    (emit-invoke env context gen call)))
 
 (defn compile-and-load
   ^Class [form]

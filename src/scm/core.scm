@@ -81,6 +81,26 @@
            (add long)
            (box long))))
 
+(define sub1
+  (lambda (n)
+    (#:jvm (#:emit n)
+           (checkCast Number)
+           (invokeVirtual Number (long "longValue"))
+           (push long 1)
+           (sub long)
+           (box long))))
+
+(define +
+  (lambda (x y)
+    (#:jvm (#:emit x)
+           (checkCast Number)
+           (invokeVirtual Number (long "longValue"))
+           (#:emit y)
+           (checkCast Number)
+           (invokeVirtual Number (long "longValue"))
+           (add long)
+           (box long))))
+
 (define <
   (lambda (x y)
     (#:jvm (#:emit x)
@@ -95,6 +115,27 @@
            (label #:is-less)
            (#:emit #t)
            (label #:end))))
+
+(define =
+  (lambda (x y)
+    (#:jvm (#:emit x)
+           (checkCast Number)
+           (invokeVirtual Number (long "longValue"))
+           (#:emit y)
+           (checkCast Number)
+           (invokeVirtual Number (long "longValue"))
+           (ifCmp long = #:are-equal)
+           (#:emit #f)
+           (goTo #:end)
+           (label #:are-equal)
+           (#:emit #t)
+           (label #:end))))
+
+(define fib
+  (lambda (n)
+    (if (< n 2)
+      1
+      (+ (fib (sub1 n)) n))))
 
 (define string->symbol
   (lambda (str)
