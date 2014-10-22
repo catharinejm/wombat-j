@@ -288,15 +288,6 @@
     (doit n)))
 
 
-#;s
-(let ((start (#:jvm (invokeStatic System (long "currentTimeMillis")) (box long)))
-      (ret (m1 50000000))
-      (end (#:jvm (invokeStatic System (long "currentTimeMillis")) (box long))))
-  (print "time: ")
-  (print (- end start))
-  (print "ms\n")
-  ret)
-
 (define m4)
 (define m3)
 (define m2)
@@ -314,3 +305,11 @@
 (define m4
   (lambda (n)
     (m1 n)))
+
+(define time
+  (lambda (thunk)
+    (let ((start (#:jvm (invokeStatic System (long "nanoTime")) (box long)))
+          (ret (thunk))
+          (end (#:jvm (invokeStatic System (long "nanoTime")) (box long))))
+      (#:printf "time: %.3f ms\n" (#:- (#:/ (#:double end) 1000000) (#:/ (#:double start) 1000000)))
+      ret)))
