@@ -113,7 +113,10 @@
   (-vector-set! [v i o]
     (aset ary i o))
   clojure.lang.Seqable
-  (seq [v] (seq ary)))
+  (seq [v] (seq ary))
+  clojure.lang.Indexed
+  (nth [v i] (aget ary i))
+  (nth [v i not-found] (aget ary i not-found)))
 
 (declare seq->list)
 (defn cons
