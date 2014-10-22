@@ -45,6 +45,10 @@
   (write-obj (.end p) w)
   (.write w ")"))
 
+(defmethod print-method Pair
+  [^Pair p ^Writer w]
+  (write-obj p w))
+
 (defmethod write-obj Vector
   [^Vector vec ^Writer w]
   (.write w "#(")

@@ -16,3 +16,38 @@
 *** { :type :lambda, :params [:x :y], :closes [...], :statements [<statement exprs>], :return <tail expr>, :parent-scope <expr of parent>, :children [:params :closes :statements :return :parent-scope] }
 ** Invocation
 *** 
+
+
+ignore the above.
+
+
+Continuation invocation:
+
+(define doit (lambda (n) (if (< n 50000) (doit2 (add1 n)) n)))
+(define doit2 (lambda (n) (doit n)))
+
+
+Top level: (lambda () (let ((r (doit 0))) r))
+
+{ top; doit }
+
+Invoke: (doit 0)
+    ret -> (Continuation. (lambda () (let ((r (doit2 1))) r)))
+
+Top Level:
+Invoke: (Continuation. [doit2])
+
+{ top; Cont ; doit2 }
+
+Invoke: (doit2 1)
+    ret -> (Continuation. (lambda () (let ((r (doit 1))) r)))
+
+{ top ; Cont ; doit2 }
+
+Invoke: (Continuation (doit 1))
+Invoke: (doit 1)
+    ret-> (Continuation. (lambda () (let ((r (doit2 2))) r)))
+
+{ top ; doit ; cont ; doit2 ; cont }
+
+

@@ -88,12 +88,13 @@
 (defn substitute
   "Renames a plain symbol to its sanitized name in the given
   environment. IllegalArgumentException is thrown for symbols which
-  are not in the given environment. Specials and class names which are
-  not in the environment map pass through unmodified.
+  are not in the given environment. Specials, class names and global
+  defines which are not in the environment map pass through
+  unmodified.
 
   E.g. (substitute '{foo foo__#0} 'foo) ;=> foo__#0
        (substitute '{foo foo__#0} 'lambda) ;=> lambda
-       (substitute '{foo foo__#0} 'java.lang.Object ;=> java.lang.Object"
+       (substitute '{foo foo__#0} 'java.lang.Object) ;=> java.lang.Object"  
   [env sym]
   (if (symbol? sym)
     (or (get env sym)
@@ -120,10 +121,11 @@
         [let-env bind-syms] (loop [e env, sani-bs [], bs (map first bindings)]
                               (if (seq bs)
                                 (let [sani (sanitize-name (first bs))]
-                                  (recur (assoc env (first bs) sani)
+                                  (recur (assoc e (first bs) sani)
                                          (conj sani-bs sani)
                                          (rest bs)))
                                 [e sani-bs]))]
+    (debug "let-env: " let-env)
     (list* 'let (map list bind-syms sani-binds) (map (partial sanitize let-env) body))))
 
 (declare sanitize-jvm)
@@ -155,7 +157,8 @@
 
 (defn sanitize
   "Renames all bound symbols within the given form to guarantee
-  uniqueness."
+  uniqueness. Throws if a symbol is not accessible from the context in
+  which it is referenced. Globally defined symbols are not renamed."
   [env form]
   (cond
    (list-like? form)
@@ -774,13 +777,16 @@
 
 (defn explodey-lambda
   [[fun & args :as call]]
-  (let [gensyms (repeatedly (count call) #(sanitize-name "GS"))
-        let-binds (map #(list %1 (list :jvm
+  (let [res (sanitize-name "result")
+        gensyms (repeatedly (count args) #(sanitize-name "GS"))
+        arg-binds (map #(list %1 (list :jvm
                                        (list :emit %2)
                                        (list :explode-continuation)))
-                       gensyms call)]
+                       gensyms args)]
     (list 'lambda ()
-          (list 'let let-binds gensyms))))
+          (list 'let arg-binds
+                (list 'let (list (list res (list* fun gensyms)))
+                      res)))))
 
 (defn emit-tail-call
   [{:keys [recur-sym restarg top-label params] :as env} ^GeneratorAdapter gen [fun & args :as call]]
@@ -816,21 +822,10 @@
       (debug "emitting continuation:" call)
       (binding [*lambda-name* (symbol (str recur-sym "_CONT"))
                 *return-continuation* true]
-        (emit env :context/expression gen fun)
-        (emit-explode-continuation gen)
-        (AsmUtil/pushInt gen (count args))
-        (. gen newArray object-type)
-        (dotimes [n (count args)]
-          (. gen dup)
-          (AsmUtil/pushInt gen n)
-          (emit env :context/expression gen (nth args n))
-          (emit-explode-continuation gen)
-          (. gen arrayStore object-type))
         (. gen newInstance (asmtype wombat.Continuation))
-        (. gen dupX2)
-        (. gen dupX2)
-        (. gen pop)
-        (. gen invokeConstructor (asmtype wombat.Continuation) (Method/getMethod "void <init>(Object,Object[])"))))))
+        (. gen dup)
+        (emit env :context/expression gen (explodey-lambda call))
+        (. gen invokeConstructor (asmtype wombat.Continuation) (Method/getMethod "void <init>(Object)"))))))
 
 (defn emit-invoke
   [env context ^GeneratorAdapter gen [fun & args :as call]]

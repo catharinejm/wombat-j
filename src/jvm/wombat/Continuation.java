@@ -1,22 +1,17 @@
 package wombat;
 
 import java.lang.invoke.*;
-import clojure.lang.Util;
+import clojure.lang.*;
 
 public class Continuation {
-    final MethodHandle lambdaHandle;
+    public static final Var COMPILE = RT.var("wombat.compiler", "compile");
+    public static final Var EMIT = RT.var("wombat.compiler", "emit");
+
     final ILambda lambda;
-    final Object[] args;
-    public Continuation(Object l, Object... args) {
-        this.args = args;
+    public Continuation(Object l) {
         this.lambda = (ILambda) l;
-        this.lambdaHandle = lambda.getHandle(args.length).asSpreader(Object[].class, args.length);
     }
     public Object invoke() {
-        try {
-            return lambdaHandle.invoke(lambda, args);
-        } catch (Throwable t) {
-            throw Util.sneakyThrow(t);
-        }
+        return lambda.invoke();
     }
 }

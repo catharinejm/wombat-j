@@ -104,7 +104,7 @@
   (assert-arity! form 1)
   (. gen mark (label env gen lname)))
 
-(defmethod emit-jvm 'goTo
+(defmethod emit-jvm 'goto
   [{:keys [labels] :as env} context ^GeneratorAdapter gen [_ lname :as form]]
   (assert-arity! form 1)
   (. gen goTo (label env gen lname)))

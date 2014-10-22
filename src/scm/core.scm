@@ -101,6 +101,28 @@
            (add long)
            (box long))))
 
+(define -
+  (lambda (x y)
+    (#:jvm (#:emit x)
+           (checkCast Number)
+           (invokeVirtual Number (long "longValue"))
+           (#:emit y)
+           (checkCast Number)
+           (invokeVirtual Number (long "longValue"))
+           (sub long)
+           (box long))))
+
+(define *
+  (lambda (x y)
+    (#:jvm (#:emit x)
+           (checkCast Number)
+           (invokeVirtual Number (long "longValue"))
+           (#:emit y)
+           (checkCast Number)
+           (invokeVirtual Number (long "longValue"))
+           (mul long)
+           (box long))))
+
 (define <
   (lambda (x y)
     (#:jvm (#:emit x)
@@ -111,8 +133,23 @@
            (invokeVirtual Number (long "longValue"))
            (ifCmp long < #:is-less)
            (#:emit #f)
-           (goTo #:end)
+           (goto #:end)
            (label #:is-less)
+           (#:emit #t)
+           (label #:end))))
+
+(define >
+  (lambda (x y)
+    (#:jvm (#:emit x)
+           (checkCast Number)
+           (invokeVirtual Number (long "longValue"))
+           (#:emit y)
+           (checkCast Number)
+           (invokeVirtual Number (long "longValue"))
+           (ifCmp long > #:is-more)
+           (#:emit #f)
+           (goto #:end)
+           (label #:is-more)
            (#:emit #t)
            (label #:end))))
 
@@ -126,7 +163,7 @@
            (invokeVirtual Number (long "longValue"))
            (ifCmp long = #:are-equal)
            (#:emit #f)
-           (goTo #:end)
+           (goto #:end)
            (label #:are-equal)
            (#:emit #t)
            (label #:end))))
@@ -158,11 +195,23 @@
       (fib-print (add1 n) m y (+ y x))
       y)))
 
+(define fac
+  (lambda (n)
+    (if (< n 2)
+      1
+      (* (fac (sub1 n)) n))))
+
+(define sum-to
+  (lambda (n)
+    (if (> n 0)
+      (+ (sum-to (sub1 n)) n)
+      0)))
+
 (define fib
   (lambda (n)
     (if (< n 2)
       1
-      (+ (fib (sub1 n)) n))))
+      (+ (fib (sub1 n)) (fib (- n 2))))))
 
 (define fib*
   (lambda (n m x y)
@@ -231,9 +280,37 @@
 (define doit2)
 (define doit
   (lambda (n)
-    (if (< n 1000000)
-      (doit2 (add1 n))
-      n)))
+    (if (> n 0)
+      (doit2 (sub1 n))
+      (print "Done!\n"))))
 (define doit2
   (lambda (n)
     (doit n)))
+
+
+#;s
+(let ((start (#:jvm (invokeStatic System (long "currentTimeMillis")) (box long)))
+      (ret (m1 50000000))
+      (end (#:jvm (invokeStatic System (long "currentTimeMillis")) (box long))))
+  (print "time: ")
+  (print (- end start))
+  (print "ms\n")
+  ret)
+
+(define m4)
+(define m3)
+(define m2)
+(define m1
+  (lambda (n)
+    (if (> n 0)
+      (m2 (sub1 n))
+      (print "done!\n"))))
+(define m2
+  (lambda (n)
+    (m3 n)))
+(define m3
+  (lambda (n)
+    (m4 n)))
+(define m4
+  (lambda (n)
+    (m1 n)))

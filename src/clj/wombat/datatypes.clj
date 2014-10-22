@@ -1,5 +1,6 @@
 (ns wombat.datatypes
   (:refer-clojure :exclude [cons list? vector?]))
+(alias 'core 'clojure.core)
 
 (defprotocol ICons
   (-cons [c o])
@@ -42,13 +43,30 @@
   (-cdr [l] tail)
   IList
   (-length [l] cnt)
+  clojure.lang.Sequential
   clojure.lang.Seqable
-  (seq [l]
-    (loop [l l
-           s []]
-      (if l
-        (recur (cdr l) (conj s (car l)))
-        (seq s)))))
+  (seq [l] l)
+  clojure.lang.Counted
+  (count [l] cnt)
+  clojure.lang.IPersistentCollection
+  (cons [l o] (-cons l o))
+  (empty [l] (zero? cnt))
+  (equiv [l o]
+    (if (or (instance? clojure.lang.Sequential o)
+            (instance? java.util.List o))
+      (loop [s (seq l)
+             os (seq o)]
+        (if (and s os
+                 (= (first s) (first os)))
+          (recur (next s) (next os))
+          (and (nil? s) (nil? os))))
+      false))
+  clojure.lang.ISeq
+  (first [l] head)
+  (next [l] tail)
+  (more [l] (if (nil? tail)
+              ()
+              tail)))
 
 (deftype Pair [front end]
   ICons
@@ -97,6 +115,7 @@
   clojure.lang.Seqable
   (seq [v] (seq ary)))
 
+(declare seq->list)
 (defn cons
   [h t]
   (cond
@@ -106,8 +125,19 @@
    (instance? wombat.datatypes.ICons t)
    (-cons t h)
 
+   (instance? clojure.lang.Seqable t)
+   (seq->list (core/cons h t))
+
    :else
    (Pair. (List. h nil 1) t)))
+
+(defn seq->list
+  [s]
+  (loop [s (reverse s)
+         l nil]
+    (if (seq s)
+      (recur (rest s) (cons (first s) l))
+      l)))
 
 (defn list?
   [o]
