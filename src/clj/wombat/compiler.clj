@@ -45,7 +45,7 @@
 (def ^:dynamic *current-define* nil)
 (def ^:dynamic *lambda-name* nil)
 (def ^:dynamic *top-level* nil)
-(def ^:dynamic *return-continuation* nil)
+(def ^:dynamic *return-continuations* nil)
 
 (defn list-like?
   "True if the given value implements clojure.lang.Seqable. Note that
@@ -778,14 +778,14 @@
 (defn explodey-lambda
   [[fun & args :as call]]
   (let [res (sanitize-name "result")
-        gensyms (repeatedly (count args) #(sanitize-name "GS"))
-        arg-binds (map #(list %1 (list :jvm
-                                       (list :emit %2)
-                                       (list :explode-continuation)))
-                       gensyms args)]
+        gensyms (repeatedly (count call) #(sanitize-name "GS"))
+        call-binds (map #(list %1 (list :jvm
+                                        (list :emit %2)
+                                        (list :explode-continuation)))
+                        gensyms call)]
     (list 'lambda ()
-          (list 'let arg-binds
-                (list 'let (list (list res (list* fun gensyms)))
+          (list 'let call-binds
+                (list 'let (list (list res gensyms))
                       res)))))
 
 (defn emit-tail-call
@@ -800,9 +800,7 @@
                 (str "Wrong number of args (" (count args) " for " (count params) (when restarg "+") ")"))))
                                         ; emit all new values
       (dotimes [n (count params)]
-        (emit env :context/expression gen (nth args n))
-        ;;(emit-explode-continuation gen)
-        )
+        (emit env :context/expression gen (nth args n)))
       (when restarg
         (let [extra (seq (drop (count params) args))]
           (AsmUtil/pushInt gen (count extra))
@@ -811,7 +809,6 @@
             (. gen dup)
             (AsmUtil/pushInt gen n)
             (emit env :context/expression gen (nth extra n))
-            ;;(emit-explode-continuation gen)
             (. gen arrayStore object-type))))
                                         ; store them in reverse order from stack
       (dotimes [n (count params)]
@@ -821,7 +818,7 @@
     (do
       (debug "emitting continuation:" call)
       (binding [*lambda-name* (symbol (str recur-sym "_CONT"))
-                *return-continuation* true]
+                *return-continuations* true]
         (. gen newInstance (asmtype wombat.Continuation))
         (. gen dup)
         (emit env :context/expression gen (explodey-lambda call))
@@ -829,43 +826,36 @@
 
 (defn emit-invoke
   [env context ^GeneratorAdapter gen [fun & args :as call]]
-  (let [return-cont *return-continuation*]
-    (binding [;*return-continuation* false
-              ]
-     (if (keyword? fun)
-       (let [fn-sym (symbol (or (namespace fun) "clojure.core") (name fun))]
-         (debug "keyword invoke: " fun)
-         (when-not (clean-resolve fn-sym)
-           (throw (IllegalArgumentException. (str "Unable to resolve clojure symbol " fn-sym))))
+  (if (keyword? fun)
+    (let [fn-sym (symbol (or (namespace fun) "clojure.core") (name fun))]
+      (debug "keyword invoke: " fun)
+      (when-not (clean-resolve fn-sym)
+        (throw (IllegalArgumentException. (str "Unable to resolve clojure symbol " fn-sym))))
 
-         (emit-var gen fn-sym)
-         (doseq [a args]
-           (emit env :context/expression gen a)
-           ;;(emit-explode-continuation gen)
-           )
-         (. gen invokeVirtual (asmtype clojure.lang.Var) (Method. "invoke" object-type (into-array Type (repeat (count args) object-type)))))
-       (do
-         (emit env :context/expression gen fun)
-         (. gen dup)
-         (. gen checkCast ilambda-type)
-         (AsmUtil/pushInt gen (count args))
-         (. gen invokeInterface ilambda-type (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)"))
-         (. gen swap)
+      (emit-var gen fn-sym)
+      (doseq [a args]
+        (emit env :context/expression gen a))
+      (. gen invokeVirtual (asmtype clojure.lang.Var) (Method. "invoke" object-type (into-array Type (repeat (count args) object-type)))))
+    (do
+      (emit env :context/expression gen fun)
+      (. gen dup)
+      (. gen checkCast ilambda-type)
+      (AsmUtil/pushInt gen (count args))
+      (. gen invokeInterface ilambda-type (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)"))
+      (. gen swap)
 
-         (doseq [a args]
-           (emit env :context/expression gen a)
-           ;;(emit-explode-continuation gen)
-           )
-         (. gen invokeVirtual (asmtype MethodHandle)
-            (Method. "invoke" object-type (into-array Type (core/cons ilambda-type (repeat (count args) object-type)))))
+      (doseq [a args]
+        (emit env :context/expression gen a))
+      (. gen invokeVirtual (asmtype MethodHandle)
+         (Method. "invoke" object-type (into-array Type (core/cons ilambda-type (repeat (count args) object-type)))))
       
-         (when-not return-cont
-           (debug "*** NOT RETURNING CONTINUATION" call)
-           (emit-explode-continuation gen))
-         (when return-cont
-           (debug "*** RETURNING CONTINUATION" call))))
-     (when (= context :context/statement)
-       (. gen pop)))))
+      (when-not *return-continuations*
+        (debug "*** NOT RETURNING CONTINUATION" call)
+        (emit-explode-continuation gen))
+      (when *return-continuations*
+        (debug "*** RETURNING CONTINUATION" call))))
+  (when (= context :context/statement)
+    (. gen pop)))
 
 (defmethod emit-seq -invoke-
   [env context ^GeneratorAdapter gen [fun & args :as call]]
@@ -874,7 +864,8 @@
   (debug "emitting invoke:" call)
   (debug "context:" context)
 
-  (if (= context :context/return)
+  (if (and (= context :context/return)
+           (not (keyword? fun))) ;; No TCO for calls into clojure
     (emit-tail-call env gen call)
     (emit-invoke env context gen call)))
 

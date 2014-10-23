@@ -21,6 +21,10 @@
   (binding [*out* *err*]
     (println (str (.getName (class e)) ": " (.getMessage e)))))
 
+(defn eval-string
+  [string]
+  (compiler/eval (reader/read (java.io.StringReader. string))))
+
 (defonce -bad-input- (Object.))
 (defn repl
   []
