@@ -148,17 +148,37 @@
 (defmethod emit-jvm 'invokeInterface
   [env context ^GeneratorAdapter gen [_ owner sig :as form]]
   (assert-arity! form 2)
-  (. gen invokeInterface (resolve-asm owner) (method (seq sig))))
+  (. gen invokeInterface (resolve-asm owner) (method sig)))
 
 (defmethod emit-jvm 'invokeStatic
   [env context ^GeneratorAdapter gen [_ owner sig :as form]]
   (assert-arity! form 2)
-  (. gen invokeStatic (resolve-asm owner) (method (seq sig))))
+  (. gen invokeStatic (resolve-asm owner) (method sig)))
 
 (defmethod emit-jvm 'invokeVirtual
   [env context ^GeneratorAdapter gen [_ owner sig :as form]]
   (assert-arity! form 2)
-  (. gen invokeVirtual (resolve-asm owner) (method (seq sig))))
+  (. gen invokeVirtual (resolve-asm owner) (method sig)))
+
+(defmethod emit-jvm 'getStatic
+  [env context ^GeneratorAdapter gen [_ owner fname ftype :as form]]
+  (assert-arity! form 3)
+  (. gen getStatic (resolve-asm owner) fname (resolve-asm ftype)))
+
+(defmethod emit-jvm 'putStatic
+  [env context ^GeneratorAdapter gen [_ owner fname ftype :as form]]
+  (assert-arity! form 3)
+  (. gen putStatic (resolve-asm owner) fname (resolve-asm ftype)))
+
+(defmethod emit-jvm 'getField
+  [env context ^GeneratorAdapter gen [_ owner fname ftype :as form]]
+  (assert-arity! form 3)
+  (. gen getField (resolve-asm owner) fname (resolve-asm ftype)))
+
+(defmethod emit-jvm 'putField
+  [env context ^GeneratorAdapter gen [_ owner fname ftype :as form]]
+  (assert-arity! form 3)
+  (. gen putField (resolve-asm owner) fname (resolve-asm ftype)))
 
 (defmethod emit-jvm 'box
   [env context ^GeneratorAdapter gen [_ type :as form]]

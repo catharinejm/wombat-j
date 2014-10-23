@@ -170,7 +170,7 @@
   [^LineNumberingPushbackReader rdr c]
   (let [form (read* rdr true nil true)
         quote ({\' 'quote \` 'quasiquote} (char c))]
-    (list quote form)))
+    (wd/list quote form)))
 
 (defmethod read-form :unquote
   [^LineNumberingPushbackReader rdr c]
@@ -180,12 +180,12 @@
      (throw (RuntimeException. "EOF while reading"))
 
      (= (char c) \@)
-     (list 'unquote-splicing (read* rdr true nil true))
+     (wd/list 'unquote-splicing (read* rdr true nil true))
 
      :else
      (do
        (unread rdr c)
-       (list 'quote (read* rdr true nil true))))))
+       (wd/list 'unquote (read* rdr true nil true))))))
 
 (defn ^java.util.List read-to-delimiter
   [^LineNumberingPushbackReader rdr close-delim]

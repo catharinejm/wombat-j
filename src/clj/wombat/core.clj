@@ -1,7 +1,8 @@
 (ns wombat.core
   (:require [wombat.compiler :as compiler]
             [wombat.reader :as reader]
-            [wombat.printer :refer [write]])
+            [wombat.printer :refer [write]]
+            [wombat.datatypes :as wd])
   (:import [java.lang.invoke MethodHandles CallSite]))
 
 (defn bootstrap

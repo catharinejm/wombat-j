@@ -25,15 +25,13 @@ public class Global {
         return site;
     }
 
-    public static CallSite bootstrapInvoke(MethodHandles.Lookup caller, String name, MethodType methodType, String cname) {
-        try {
-            DynamicClassLoader loader = (DynamicClassLoader) LOADER.deref();
-            Class ilambda = Class.forName(cname, true, loader);
-            MethodHandle handle = caller.findVirtual(ilambda, name, methodType.dropParameterTypes(0,1));
-            return new ConstantCallSite(handle.asType(methodType));
-        } catch (Throwable t) {
-            throw Util.sneakyThrow(t);
-        }
+    public static Object invokeLambda(ILambda lambda, Object[] args) {
+        try{
+            Object ret = lambda.getHandle(args.length).asSpreader(Object[].class, args.length).invoke(lambda, args);
+            while (ret instanceof Continuation)
+                ret = ((Continuation)ret).invoke();
+            return ret;
+        }catch(Throwable t) { throw Util.sneakyThrow(t); }
     }
 
 }

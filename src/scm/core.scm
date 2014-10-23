@@ -16,25 +16,6 @@
   (lambda (a d)
     (#:wombat.datatypes/cons a d)))
 
-(define eqv?
-  (lambda (a b)
-    (#:jvm (#:emit a)
-           (#:emit b)
-           (invokeVirtual Object (boolean "equals" Object))
-           (box boolean))))
-
-(define namespace
-  (lambda (named)
-    (#:jvm (#:emit named)
-          (checkCast clojure.lang.Named)
-          (invokeInterface clojure.lang.Named (String "getNamespace")))))
-
-(define name
-  (lambda (named)
-    (#:jvm (#:emit named)
-          (checkCast clojure.lang.Named)
-          (invokeInterface clojure.lang.Named (String "getName")))))
-
 ; This is NOT recursive!
 ; (if (null? ...) ...) is a special case in the compiler!
 (define null?
@@ -48,6 +29,88 @@
     (if o
       #f
       #t)))
+
+(define foldl
+  (lambda (f init vals)
+    (if (null? vals)
+      init
+      (foldl f (f (car vals) init) (cdr vals)))))
+
+(define foldr
+  (lambda (f init vals)
+    (if (null? vals)
+      init
+      (f (car vals) (foldr f init (cdr vals))))))
+
+(define eqv?
+  (lambda (a b)
+    (if (null? a)
+      (null? b)
+      (#:jvm (#:emit a)
+             (#:emit b)
+             (invokeVirtual Object (boolean "equals" Object))
+             (box boolean)))))
+
+(define list?
+  (lambda (x)
+    (#:wombat.datatypes/list? x)))
+
+(define pair?
+  (lambda (x)
+    (#:wombat.datatypes/pair? x)))
+
+(define print
+  (lambda (o)
+    (#:print o)))
+
+(define quasiquote-pair*
+  (lambda (p)
+    (let ((q (lambda (x)
+               (if (pair? x)
+                 (begin (print "x is pair: ")
+                        (print (#:str x))
+                        (print "\n")
+                        (if (eqv? (car x) 'unquote)
+                          (car (cdr x))
+                          (quasiquote-pair* x)))
+                 (begin
+                   (print "x is NOT pair: ")
+                   (print (#:str x))
+                   (print (#:str (#:class x)))
+                   (print "\n")
+                   (list 'quote x))))))
+      (cons 'list (foldr (lambda (x rest)
+                           (cons (q x) rest))
+                         '() p)))))
+
+;; TODO: unquote-splicing
+(define-macro quasiquote
+  (lambda (x)
+    (if (not (pair? x))
+      (list 'quote x)
+      (quasiquote-pair* x))))
+
+#;
+(define-macro or
+  (lambda vals
+    (if (null? vals)
+      #f
+      (let ((x (car vals)))
+        (if x
+          x
+          (or (cdr vals)))))))
+
+(define namespace
+  (lambda (named)
+    (#:jvm (#:emit named)
+          (checkCast clojure.lang.Named)
+          (invokeInterface clojure.lang.Named (String "getNamespace")))))
+
+(define name
+  (lambda (named)
+    (#:jvm (#:emit named)
+          (checkCast clojure.lang.Named)
+          (invokeInterface clojure.lang.Named (String "getName")))))
 
 (define get-var
   (lambda (sym)
@@ -168,10 +231,6 @@
            (#:emit #t)
            (label #:end))))
 
-(define print
-  (lambda (o)
-    (#:print o)))
-
 (define obj->str
   (lambda (o)
     (#:wombat.printer/write-str o)))
@@ -248,18 +307,6 @@
     (if lis
       (cons (f (car lis)) (map f (cdr lis)))
       '())))
-
-(define foldl
-  (lambda (f init vals)
-    (if (null? vals)
-      init
-      (foldl f (f (car vals) init) (cdr vals)))))
-
-(define foldr
-  (lambda (f init vals)
-    (if (null? vals)
-      init
-      (f (car vals) (foldr f init (cdr vals))))))
 
 #;
 (define define-record

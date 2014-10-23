@@ -1,5 +1,5 @@
 (ns wombat.datatypes
-  (:refer-clojure :exclude [cons list? vector?]))
+  (:refer-clojure :exclude [cons list? list list* vector?]))
 (alias 'core 'clojure.core)
 
 (defprotocol ICons
@@ -141,6 +141,15 @@
     (if (seq s)
       (recur (rest s) (cons (first s) l))
       l)))
+
+(defn list*
+  [& elems]
+  (let [tail (last elems)]
+    (reduce #(cons %2 %1) (seq->list (last elems)) (reverse (butlast elems)))))
+
+(defn list
+  [& elems]
+  (seq->list elems))
 
 (defn list?
   [o]

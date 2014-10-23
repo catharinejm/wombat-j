@@ -11,22 +11,12 @@
            [java.io FileReader]
            [java.util WeakHashMap]
            [wombat ILambda AsmUtil Global])
-  (:refer-clojure :exclude [compile load-file eval read cons list? vector?]))
+  (:refer-clojure :exclude [compile load-file eval read cons list? vector? list* list]))
 (alias 'core 'clojure.core)
 
 ;(set! *warn-on-reflection* true)
 
 (def ^:dynamic *class-loader* (DynamicClassLoader. (RT/baseLoader)))
-;; (def ^WeakHashMap metadata (WeakHashMap.))
-
-;; (defn add-meta [o m]
-;;   (when (some? o)
-;;     (.put metadata o m)))
-;; (defn get-meta [o]
-;;   (.get metadata o))
-;; (defn carry-meta [from to]
-;;   (some->> (get-meta from) (add-meta to)))
-
 (def clean-resolve (partial ns-resolve 'wombat.empty))
 
 (defn maybe-class
@@ -42,6 +32,7 @@
     (apply println vals)))
 
 (def global-bindings (atom {}))
+(def macros (atom {}))
 (def ^:dynamic *current-define* nil)
 (def ^:dynamic *lambda-name* nil)
 (def ^:dynamic *top-level* nil)
@@ -69,6 +60,7 @@
     'let
     'if
     'define
+    'define-macro
     'define-class*
     'quote
     'begin
@@ -97,16 +89,46 @@
        (substitute '{foo foo__#0} 'java.lang.Object) ;=> java.lang.Object"  
   [env sym]
   (if (symbol? sym)
-    (or (get env sym)
-        (get specials sym)
-        (and (contains? @global-bindings sym) sym)
-        (and (= *current-define* sym) sym)
-        (and (maybe-class sym) sym)
-        (throw (IllegalArgumentException. (str "symbol " sym " is not defined"))))
+    (cond
+     (contains? env sym)
+     (env sym)
+
+     (contains? specials sym)
+     (specials sym)
+
+     (contains? @global-bindings sym)
+     sym
+
+     (= *current-define* sym)
+     sym
+
+     ;; Should this go here? Not sure where else...
+     (contains? @macros sym)
+     (throw (RuntimeException. (str "Can't take the value of a macro: " sym)))
+
+     (maybe-class sym)
+     sym
+
+     :else
+     (throw (IllegalArgumentException. (str "symbol " sym " is not defined"))))
     sym))
 
-(declare sanitize)
+(defn expand1
+  [[maybe-macro & args :as form]]
+  (if (and (not (contains? specials maybe-macro))
+           (contains? @macros maybe-macro))
+    (let [^ILambda macro (@macros maybe-macro)]
+      (Global/invokeLambda macro (object-array args)))
+    form))
 
+(defn expand
+  [form]
+  (let [expanded (expand1 form)]
+    (if (identical? form expanded)
+      form
+      (recur expanded))))
+
+(declare sanitize)
 (defn sanitize-lambda
   [env [_ params & body :as form]]
   (let [params (if (symbol? params) (list rest-token params) params)
@@ -132,28 +154,27 @@
 
 (defn sanitize-seq
   [env form]
-  (match (seq form)
-    nil form
-    
-    (['quote val] :seq) (list 'quote val)
+  (if (seq form)
+    (condp #(and (contains? %1 (first %2)) %2) form
+      #{'quote} :>> (fn [[_ val]] (list 'quote val))
 
-    (['lambda params & body] :seq)
-    (sanitize-lambda env (seq form))
+      #{'lambda} :>> (partial sanitize-lambda env)
 
-    (['let bindings & body] :seq)
-    (sanitize-let env (seq form))
+      #{'let} :>> (partial sanitize-let env)
+      
+      #{'define 'define-macro} :>> (fn [[define name & val]]
+                                     (list* define name (map (partial sanitize (assoc env name name)) val)))
 
-    (['define name & val] :seq)
-    (list* 'define name (map (partial sanitize (assoc env name name)) val))
+      #{'define-class} form
 
-    (['define-class* & rest] :seq)
-    form
+      #{:jvm} :>> (fn [[_ & insns]]
+                    (list* :jvm (map (partial sanitize-jvm env) insns)))
 
-    ([:jvm & insns] :seq)
-    (list* :jvm (map #(sanitize-jvm env (seq %)) insns))
-
-    :else
-    (map (partial sanitize env) form)))
+      (let [expanded (expand form)]
+        (if (identical? expanded form)
+          (map (partial sanitize env) form)
+          (recur env expanded))))
+    nil))
 
 (defn sanitize
   "Renames all bound symbols within the given form to guarantee
@@ -482,7 +503,7 @@
   (. gen invokeDynamic "getGlobal"
      (.toMethodDescriptorString (MethodType/methodType Object (make-array Class 0)))
      global-bootstrap
-     (object-array [(name sym)])))
+     (object-array [(str sym)])))
 
 (defn emit-symbol
   [{:keys [params closed-overs locals thistype] :as env} context gen sym]
@@ -676,12 +697,26 @@
       (swap! global-bindings assoc sym (VolatileCallSite. handle))))
   value)
 
+(defn set-macro!
+  [sym value]
+  (cast Symbol sym)
+  (cast ILambda value)
+  (swap! macros assoc sym value)
+  sym)
+
 (defmethod emit-seq 'define
   [env context ^GeneratorAdapter gen [_ name val :as form]]
   (when (> (count form) 3)
     (throw (IllegalArgumentException. "define only takes one value")))
   (set-global! name (eval* val))
-  (emit-global gen name))
+  (emit env context gen name))
+
+(defmethod emit-seq 'define-macro
+  [env context ^GeneratorAdapter gen [_ name val :as form]]
+  (when (> (count form) 3)
+    (throw (IllegalArgumentException. "define-macro only takes one value")))
+  (set-macro! name (eval* val))
+  (emit env context gen name))
 
 (defmethod emit-seq 'if
   [env context ^GeneratorAdapter gen [_ condition then else :as the-if]]
@@ -893,6 +928,11 @@
    (binding [*current-define* (second form)
              *lambda-name* (second form)]
      (set-global! (second form) (eval* (first (nnext form)))))
+
+   (and (list-like? form) (= (first form) 'define-macro))
+   (binding [*current-define* (second form)
+             *lambda-name* (second form)]
+     (set-macro! (second form) (eval* (first (nnext form)))))
 
    (and (list-like? form) (= (first form) 'define-class*))
    (set-global! (second form) (compile-and-load form))

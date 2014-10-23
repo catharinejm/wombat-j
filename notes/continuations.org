@@ -1,0 +1,42 @@
+Building continuation function:
+
+Emit fn
+Runtime Check:
+   if Continuation
+      Return ContList(fn-cont, (lambda (fn) (fn . closed-over-args)))
+   else
+      Return (lambda () (closed-over-fn . closed-over-args))
+
+Emit arg1
+if Continuation
+   Return ConstList(arg1-cont, (lambda (arg1) (closed-over-fn arg1 . remaining-args)))
+ 
+ContList eval
+
+Eval head
+if Continuation:
+    Return ContList (new-head-cont . (cdr ContList))
+else
+    loop (evald-head evald-head)
+         (rem (cdr ContList))
+
+       if (null? (cdr ContList)
+          Return evald-head
+       else if (Continuation? evald-head)
+          Return ContList(evald-head . rem)
+       else
+          (recur (cdr rem) ((car rem) evald-head))
+
+
+(lambda ()
+  (let ((fn (#:emit fn)))
+    (if (continuation? fn)
+       (Continuation. (list fn (lambda (f) (f . args))))
+       (let loop ((n 0)
+                  (args args))
+         (if (null? args)
+           (#!no-cont fn . args) ; do invoke
+           (let ((a (#:emit (car args))))
+             (if (continuation? (car args))
+               (Continuation. (list a (lambda (a') (list fn ~@(take n args) a' ~@(drop (inc n) args)))))
+               

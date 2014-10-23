@@ -2,7 +2,7 @@
   (:require [wombat.datatypes :refer :all])
   (:import [java.io Writer]
            [wombat.datatypes List Pair Vector])
-  (:refer-clojure :exclude [cons list? vector?]))
+  (:refer-clojure :exclude [cons list? vector? list* list]))
 (alias 'core 'clojure.core)
 
 (defmulti write-obj
