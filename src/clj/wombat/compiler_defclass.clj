@@ -92,6 +92,11 @@
   [cls]
   (asmtype (maybe-prim-resolve cls)))
 
+(defmethod emit-jvm :jvm
+  [env context ^GeneratorAdapter gen [_ & forms]]
+  (doseq [f forms]
+    (emit-jvm env context gen f)))
+
 (defmethod emit-jvm 'ifCmp
   [env context ^GeneratorAdapter gen [_ type op lname :as form]]
   (assert-arity! form 3)
@@ -139,11 +144,15 @@
   (assert-arity! form 0)
   (emit-explode-continuation gen))
 
-(defmethod emit-jvm 'getField
-  [{thistype :thistype :as env} context ^GeneratorAdapter gen [_ name type :as form]]
+(defmethod emit-jvm 'newInstance
+  [env context ^GeneratorAdapter gen [_ type :as form]]
+  (assert-arity! form 1)
+  (. gen newInstance (resolve-asm type)))
+
+(defmethod emit-jvm 'invokeConstructor
+  [env context ^GeneratorAdapter gen [_ owner sig :as form]]
   (assert-arity! form 2)
-  (. gen loadThis)
-  (. gen getField thistype name (resolve-asm type)))
+  (. gen invokeConstructor (resolve-asm owner) (method sig)))
 
 (defmethod emit-jvm 'invokeInterface
   [env context ^GeneratorAdapter gen [_ owner sig :as form]]
@@ -180,6 +189,15 @@
   (assert-arity! form 3)
   (. gen putField (resolve-asm owner) fname (resolve-asm ftype)))
 
+(defmethod emit-jvm 'throwException
+  [env context ^GeneratorAdapter gen [_ type? msg? :as form]]
+  (when-not (or (= 1 (count form))
+                (= 3 (count form)))
+    (throw (IllegalArgumentException. "throwException directive takes 0 or 2 arguments")))
+  (if type?
+    (. gen throwException (resolve-asm type?) msg?)
+    (. gen throwException)))
+
 (defmethod emit-jvm 'box
   [env context ^GeneratorAdapter gen [_ type :as form]]
   (assert-arity! form 1)
@@ -211,6 +229,21 @@
     '#{Class java.lang.Class} (. gen push (resolve-asm val))
     '#{String java.lang.String} (. gen push (cast String val))
     (throw (IllegalArgumentException. (str "Cannot push type " type)))))
+
+(defmethod emit-jvm 'pop
+  [env context ^GeneratorAdapter gen form]
+  (assert-arity! form 0)
+  (. gen pop))
+
+(defmethod emit-jvm 'dup
+  [env context ^GeneratorAdapter gen form]
+  (assert-arity! form 0)
+  (. gen dup))
+
+(defmethod emit-jvm 'swap
+  [env context ^GeneratorAdapter gen form]
+  (assert-arity! form 0)
+  (. gen swap))
 
 (defmethod emit-jvm 'add
   [env context ^GeneratorAdapter gen [_ type :as form]]

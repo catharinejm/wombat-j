@@ -27,7 +27,13 @@ public class Global {
 
     public static Object invokeLambda(ILambda lambda, Object[] args) {
         try{
-            Object ret = lambda.getHandle(args.length).asSpreader(Object[].class, args.length).invoke(lambda, args);
+            MethodHandle handle = lambda.getHandle(args.length);
+            Object ret;
+            if (handle.isVarargsCollector())
+                ret = handle.invoke(lambda, args);
+            else
+                ret = handle.asSpreader(Object[].class, args.length).invoke(lambda, args);
+
             while (ret instanceof Continuation)
                 ret = ((Continuation)ret).invoke();
             return ret;

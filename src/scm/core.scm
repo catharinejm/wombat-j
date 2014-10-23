@@ -42,6 +42,10 @@
       init
       (f (car vals) (foldr f init (cdr vals))))))
 
+(define concat
+  (lambda (l1 l2)
+    (foldr cons l2 l1)))
+
 (define eqv?
   (lambda (a b)
     (if (null? a)
@@ -55,6 +59,10 @@
   (lambda (x)
     (#:wombat.datatypes/list? x)))
 
+(define list*
+  (lambda ls
+    (#:wombat.datatypes/list* ls)))
+
 (define pair?
   (lambda (x)
     (#:wombat.datatypes/pair? x)))
@@ -67,18 +75,10 @@
   (lambda (p)
     (let ((q (lambda (x)
                (if (pair? x)
-                 (begin (print "x is pair: ")
-                        (print (#:str x))
-                        (print "\n")
-                        (if (eqv? (car x) 'unquote)
-                          (car (cdr x))
-                          (quasiquote-pair* x)))
-                 (begin
-                   (print "x is NOT pair: ")
-                   (print (#:str x))
-                   (print (#:str (#:class x)))
-                   (print "\n")
-                   (list 'quote x))))))
+                 (if (eqv? (car x) 'unquote)
+                   (car (cdr x))
+                   (quasiquote-pair* x))
+                 (list 'quote x)))))
       (cons 'list (foldr (lambda (x rest)
                            (cons (q x) rest))
                          '() p)))))
@@ -90,15 +90,17 @@
       (list 'quote x)
       (quasiquote-pair* x))))
 
-#;
-(define-macro or
-  (lambda vals
-    (if (null? vals)
-      #f
-      (let ((x (car vals)))
-        (if x
-          x
-          (or (cdr vals)))))))
+(define-macro fail
+  (lambda (msg)
+    `(#:jvm (throwException RuntimeException ,msg))))
+
+(define-macro cond
+  (lambda conds
+    (let ((c (lambda (c rest)
+               (list 'if (car c)
+                     (car (cdr c))
+                     rest))))
+      (foldr c '() conds))))
 
 (define namespace
   (lambda (named)
