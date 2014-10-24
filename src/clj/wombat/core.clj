@@ -3,7 +3,8 @@
             [wombat.reader :as reader]
             [wombat.printer :refer [write]]
             [wombat.datatypes :as wd])
-  (:import [java.lang.invoke MethodHandles CallSite]))
+  (:import [java.lang.invoke MethodHandles CallSite])
+  (:refer-clojure :exclude [read-string]))
 
 (defn bootstrap
   ([] (bootstrap false))

@@ -6,7 +6,7 @@
            [java.io FileReader Reader]
            [java.util ArrayList]
            [wombat.datatypes List Pair Vector])
-  (:refer-clojure :exclude [read]))
+  (:refer-clojure :exclude [read read-string]))
 
 (defn ^LispReader$ReaderException reader-exception
   [^LineNumberingPushbackReader rdr ^Throwable cause]
@@ -357,3 +357,7 @@
 (defmethod read-dispatch-form :binary
   [^LineNumberingPushbackReader rdr c]
   (read-integer rdr 2))
+
+(defn read-string
+  [^String str]
+  (read (java.io.StringReader. str)))

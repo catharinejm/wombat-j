@@ -16,8 +16,8 @@
   (lambda (a d)
     (#:wombat.datatypes/cons a d)))
 
-; This is NOT recursive!
-; (if (null? ...) ...) is a special case in the compiler!
+;; This is NOT recursive!
+;; (if (null? ...) ...) is a special case in the compiler!
 (define null?
   (lambda (o)
     (if (null? o)
@@ -42,6 +42,11 @@
       init
       (f (car vals) (foldr f init (cdr vals))))))
 
+(define map
+  (lambda (f lis)
+    (foldr (lambda (x xs)
+             (cons (f x) xs)) '() lis)))
+
 (define concat
   (lambda (l1 l2)
     (foldr cons l2 l1)))
@@ -59,10 +64,6 @@
   (lambda (x)
     (#:wombat.datatypes/list? x)))
 
-(define list*
-  (lambda ls
-    (#:wombat.datatypes/list* ls)))
-
 (define pair?
   (lambda (x)
     (#:wombat.datatypes/pair? x)))
@@ -71,25 +72,53 @@
   (lambda (o)
     (#:print o)))
 
-(define quasiquote-pair*
-  (lambda (p)
-    (let ((q (lambda (x)
-               (if (pair? x)
-                 (if (eqv? (car x) 'unquote)
-                   (car (cdr x))
-                   (quasiquote-pair* x))
-                 (list 'quote x)))))
-      (cons 'list (foldr (lambda (x rest)
-                           (cons (q x) rest))
-                         '() p)))))
+(define expand
+  (lambda (f)
+    (#:wombat.compiler/expand f)))
 
-;; TODO: unquote-splicing
+(define obj->str
+  (lambda (o)
+    (#:wombat.printer/write-str o)))
+
+(define reverse
+  (lambda (lis)
+    (foldl cons '() lis)))
+
+(define list*
+  (lambda ls
+    (if (null? ls)
+      '()
+      (let ((rlis (reverse ls)))
+        (if (not (list? (car rlis)))
+          (#:jvm (throwException IllegalArgumentException "list* expects list as final arg")))
+        (foldl cons (car rlis) (cdr rlis))))))
+
+(define quasiquote-pair*
+  (lambda (c l ls)
+    (if (null? c)
+      (list 'foldl 'concat '() (list* (cons 'list (reverse l)) ls))
+      (if (pair? (car c))
+        (if (eqv? (car (car c)) 'unquote)
+          (quasiquote-pair* (cdr c)
+                            (cons (car (cdr (car c))) l)
+                            ls)
+          (if (eqv? (car (car c)) 'unquote-splicing)
+            (quasiquote-pair* (cdr c)
+                              '()
+                              (list* (car (cdr (car c))) (cons 'list (reverse l)) ls))
+            (quasiquote-pair* (cdr c)
+                              (cons (quasiquote-pair* (car c) '() '()) l)
+                              ls)))
+        (quasiquote-pair* (cdr c) (cons (list 'quote (car c)) l) ls)))))
+
 (define-macro quasiquote
   (lambda (x)
-    (if (not (pair? x))
-      (list 'quote x)
-      (quasiquote-pair* x))))
+    (let ((res (if (not (pair? x))
+                 (list 'quote x)
+                 (cons 'list (quasiquote-pair* x '() '())))))
+      res)))
 
+#;
 (define-macro fail
   (lambda (msg)
     `(#:jvm (throwException RuntimeException ,msg))))
@@ -102,17 +131,74 @@
                      rest))))
       (foldr c '() conds))))
 
+(define-macro let*
+  (lambda (binds #!rest body)
+    (print "binds: ")
+    (print (obj->str binds))
+    (print " body: ")
+    (print (obj->str body))
+    (print "\n")
+    (let ((let-binds (foldr (lambda (b rest)
+                              (list 'let (list b)
+                                    rest))
+                            '() binds)))
+      (list* let-binds body))))
+
+(define last
+  (lambda (lis)
+    (if (null? lis)
+      '()
+      (if (null? (cdr lis))
+        (car lis)
+        (last (cdr lis))))))
+
+(define instance?
+  (lambda (cls o)
+    (#:jvm (#:emit cls)
+           (checkCast Class)
+           (#:emit o)
+           (invokeVirtual Class (boolean "isInstance" Object))
+           (box boolean))))
+
+(define string?
+  (lambda (o)
+    (instance? String o)))
+
+;; (define-macro new
+;;   (lambda (c)
+;;     `(#:jvm (newInstance ,c)
+;;             (dup)
+;;             (invokeConstructor ,c (void "<init>")))))
+
+;; obj format: (Type object)
+;; meth format: (ReturnType "methodName" Arg1Type Arg2type ...)
+;; (define-macro call
+;;   (lambda (obj meth #!rest args)
+;;     (let ((type (car obj))
+;;           (obj (car (cdr obj))))
+;;       `(#:jvm (#:emit ,obj)
+;;               (checkCast ,type)
+;;               (invokeVirtual ,type ,meth)))))
+
+;; (define str
+;;   (lambda vals
+;;     (let ((sb (new StringBuilder)))
+;;       (foldl (lambda (v sb)
+;;                (if (string? v)
+;;                  (call (StringBuilder sb) (StringBuilder "append" String))
+;;                  (call (StringBuilder sb) (StringBuilder "append"))))))))
+
 (define namespace
   (lambda (named)
     (#:jvm (#:emit named)
-          (checkCast clojure.lang.Named)
-          (invokeInterface clojure.lang.Named (String "getNamespace")))))
+           (checkCast clojure.lang.Named)
+           (invokeInterface clojure.lang.Named (String "getNamespace")))))
 
 (define name
   (lambda (named)
     (#:jvm (#:emit named)
-          (checkCast clojure.lang.Named)
-          (invokeInterface clojure.lang.Named (String "getName")))))
+           (checkCast clojure.lang.Named)
+           (invokeInterface clojure.lang.Named (String "getName")))))
 
 (define get-var
   (lambda (sym)
@@ -128,14 +214,6 @@
       '()
       (#:jvm (#:emit obj)
              (invokeVirtual Object (Class "getClass"))))))
-
-(define instance?
-  (lambda (cls o)
-    (#:jvm (#:emit cls)
-           (checkCast Class)
-           (#:emit o)
-           (invokeVirtual Class (boolean "isInstance" Object))
-           (box boolean))))
 
 (define add1
   (lambda (n)
@@ -233,10 +311,6 @@
            (#:emit #t)
            (label #:end))))
 
-(define obj->str
-  (lambda (o)
-    (#:wombat.printer/write-str o)))
-
 (define fib-print
   (lambda (n m x y)
     (print "******\n")
@@ -304,26 +378,20 @@
   (lambda ()
     (string->symbol (conc "G__#" (str (#:wombat.compiler/next-id))))))
 
-(define map
-  (lambda (f lis)
-    (if lis
-      (cons (f (car lis)) (map f (cdr lis)))
-      '())))
 
-#;
-(define define-record
-  (lambda (rname fields)
-    (#:wombat.compiler/set-global!
-     (string->symbol (conc "make-" rname))
-     (eval (list 'lambda fields
-                 (let ((gs (gensym)))
-                   (list 'lambda (list gs)
-                         (cons 'list fields) ;; capture in closure
-                         (foldr (lambda (f coll)
-                                  (cons 'if (cons (list 'eqv? (list 'quote f) gs)
-                                                  (list f coll))))
-                                '() fields))))))
-    '()))
+;; (define define-record
+;;   (lambda (rname fields)
+;;     (#:wombat.compiler/set-global!
+;;      (string->symbol (conc "make-" rname))
+;;      (eval (list 'lambda fields
+;;                  (let ((gs (gensym)))
+;;                    (list 'lambda (list gs)
+;;                          (cons 'list fields) ;; capture in closure
+;;                          (foldr (lambda (f coll)
+;;                                   (cons 'if (cons (list 'eqv? (list 'quote f) gs)
+;;                                                   (list f coll))))
+;;                                 '() fields))))))
+;;     '()))
 
 
 (define doit2)

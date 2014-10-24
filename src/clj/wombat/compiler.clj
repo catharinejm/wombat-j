@@ -814,10 +814,16 @@
   [[fun & args :as call]]
   (let [res (sanitize-name "result")
         gensyms (repeatedly (count call) #(sanitize-name "GS"))
-        call-binds (map #(list %1 (list :jvm
-                                        (list :emit %2)
-                                        (list :explode-continuation)))
-                        gensyms call)]
+        gen-bind (fn [sym val]
+                                        ; trying to explode a lambda confuses the class loader
+                                        ; and isn't necessary anyway
+                   (if (and (list-like? val)
+                            (not= (first val) 'lambda))
+                     (list sym (list :jvm
+                                     (list :emit val)
+                                     (list :explode-continuation)))
+                     (list sym val)))
+        call-binds (map gen-bind gensyms call)]
     (list 'lambda ()
           (list 'let call-binds
                 (list 'let (list (list res gensyms))

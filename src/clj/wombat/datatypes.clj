@@ -10,7 +10,7 @@
 (defn assert-pair!
   [o]
   (when-not (instance? wombat.datatypes.ICons o)
-    (throw (IllegalArgumentException. "Exptected pair"))))
+    (throw (IllegalArgumentException. (str "Exptected pair, got " (class o) ": " o)))))
 
 (defn car
   [o]
