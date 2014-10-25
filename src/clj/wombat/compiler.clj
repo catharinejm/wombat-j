@@ -2,6 +2,7 @@
   (:require [clojure.core.match :refer [match]]
             wombat.empty
             [wombat.reader :refer [read]]
+            [wombat.printer :refer :all]
             [wombat.datatypes :refer :all])
   (:import [org.objectweb.asm ClassWriter ClassVisitor Opcodes Type Handle]
            [org.objectweb.asm.commons GeneratorAdapter Method]
@@ -64,8 +65,6 @@
     'define-class*
     'quote
     'begin
-    'null?
-    'not
     rest-token})
 
 (defn sanitize-name
@@ -808,26 +807,57 @@
     (. gen goTo precheck)
     (. gen mark no-cont-label)))
 
-(declare no-continuation-lambda)
+(declare no-continuation-lambda explode-invocation)
+
+(defmulti explode-special first)
+(defmethod explode-special :default
+  [form] form)
+(defmethod explode-special 'if
+  [[_ & forms]]
+  (list* 'if (map explode-invocation forms)))
+
+(defmethod explode-special 'let
+  [_ binds & body]
+  (list* 'let (seq->list (map (fn [bind val]
+                                (list bind
+                                      (explode-invocation val)))
+                              binds))
+         (map explode-invocation body)))
+
+(defmethod explode-special 'define
+  [_ sym val]
+  (list 'define sym (explode-invocation val)))
+(defmethod explode-special 'define-macro
+  [_ sym val]
+  (list 'define-macro sym (explode-invocation val)))
+(defmethod explode-special 'begin
+  [_ & body]
+  (list* 'begin (map explode-invocation body)))
+
+(defn explode-invocation
+  [listy]
+  (if (list-like? listy)
+    (letfn [(explode [v]
+              (list :jvm
+                    (list :emit v)
+                    (list :explode-continuation)))]
+      (loop [lis listy
+             new-list []]
+        (if (seq lis)
+          (if (and (list-like? (first lis)))
+            (if (contains? specials (ffirst lis))
+              (recur (rest lis) (conj new-list (explode-special (first lis))))
+              (recur (rest lis) (conj new-list (explode (explode-invocation (first lis))))))
+            (recur (rest lis) (conj new-list (first lis))))
+          (seq->list (seq new-list)))))
+    listy))
 
 (defn explodey-lambda
   [[fun & args :as call]]
-  (let [res (sanitize-name "result")
-        gensyms (repeatedly (count call) #(sanitize-name "GS"))
-        gen-bind (fn [sym val]
-                                        ; trying to explode a lambda confuses the class loader
-                                        ; and isn't necessary anyway
-                   (if (and (list-like? val)
-                            (not= (first val) 'lambda))
-                     (list sym (list :jvm
-                                     (list :emit val)
-                                     (list :explode-continuation)))
-                     (list sym val)))
-        call-binds (map gen-bind gensyms call)]
+  (let [res (sanitize-name "result")]
     (list 'lambda ()
-          (list 'let call-binds
-                (list 'let (list (list res gensyms))
-                      res)))))
+          (list 'let (list (list res (explode-invocation call)))
+                res))))
 
 (defn emit-tail-call
   [{:keys [recur-sym restarg top-label params] :as env} ^GeneratorAdapter gen [fun & args :as call]]

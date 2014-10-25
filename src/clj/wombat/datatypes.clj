@@ -136,11 +136,13 @@
 
 (defn seq->list
   [s]
-  (loop [s (reverse s)
-         l nil]
-    (if (seq s)
-      (recur (rest s) (cons (first s) l))
-      l)))
+  (if (instance? wombat.datatypes.IList s)
+    s
+    (loop [s (reverse s)
+           l nil]
+      (if (seq s)
+        (recur (rest s) (cons (first s) l))
+        l))))
 
 (defn list*
   [& elems]

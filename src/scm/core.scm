@@ -47,9 +47,13 @@
     (foldr (lambda (x xs)
              (cons (f x) xs)) '() lis)))
 
-(define concat
+(define cat*
   (lambda (l1 l2)
     (foldr cons l2 l1)))
+
+(define concat
+  (lambda ls
+    (foldr cat* '() ls)))
 
 (define eqv?
   (lambda (a b)
@@ -93,10 +97,22 @@
           (#:jvm (throwException IllegalArgumentException "list* expects list as final arg")))
         (foldl cons (car rlis) (cdr rlis))))))
 
+(define foobar
+  (lambda ()
+    (list 'foldl 'concat '() (list* 'list (reverse '(1 2 3)) '((list 4 5))))))
+
+(define apply
+  (lambda (f args)
+    (#:jvm (#:emit f)
+           (checkCast wombat.ILambda)
+           (#:invoke #:object-array args)
+           (checkCast (Object))
+           (invokeStatic wombat.Global (Object "invokeLambda" wombat.ILambda (Object))))))
+
 (define quasiquote-pair*
   (lambda (c l ls)
     (if (null? c)
-      (list 'foldl 'concat '() (list* (cons 'list (reverse l)) ls))
+      (list 'apply 'concat (cons 'list (reverse (cons (cons 'list (reverse l)) ls))))
       (if (pair? (car c))
         (if (eqv? (car (car c)) 'unquote)
           (quasiquote-pair* (cdr c)
@@ -115,7 +131,7 @@
   (lambda (x)
     (let ((res (if (not (pair? x))
                  (list 'quote x)
-                 (cons 'list (quasiquote-pair* x '() '())))))
+                 (quasiquote-pair* x '() '()))))
       res)))
 
 #;

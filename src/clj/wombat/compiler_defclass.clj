@@ -28,7 +28,7 @@
 
 (defmethod emit-jvm -emit-jvm-default-
   [env context ^GeneratorAdapter gen insns]
-  (throw (IllegalArgumentException. (str "unrecognized jvm form: " insns))))
+  (throw (IllegalArgumentException. (str "unrecognized jvm form: " (write-str insns)))))
 
 (defmethod emit-jvm :emit
   [env context ^GeneratorAdapter gen [_ val :as form]]
@@ -117,7 +117,7 @@
 (defmethod emit-jvm 'checkCast
   [env context ^GeneratorAdapter gen [_ class :as form]]
   (assert-arity! form 1)
-  (. gen checkCast (asmtype (clean-resolve class))))
+  (. gen checkCast (resolve-asm class)))
 
 (defmethod emit-jvm 'loadThis
   [env context ^GeneratorAdapter gen form]
