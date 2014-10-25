@@ -72,7 +72,8 @@
    \d :decimal
    \o :octal
    \x :hex
-   \b :binary})
+   \b :binary
+   \# :internal-symbol})
 
 (defn unread
   [^LineNumberingPushbackReader rdr c]
@@ -84,7 +85,7 @@
   (or (= ch -1)
       (Character/isWhitespace (int ch))
       (and (contains? form-tokens (char ch))
-           (not (#{\# \'} (char ch))))))
+           (not (#{\# \' \` \,} (char ch))))))
 
 (defn read-token
   [^LineNumberingPushbackReader rdr c]
@@ -321,6 +322,13 @@
       (if (contains? specials tok)
         (symbol (str "#!" (specials tok)))
         (throw (RuntimeException. (str "Invalid #! token: " tok)))))))
+
+(defmethod read-dispatch-form :internal-symbol
+  [^LineNumberingPushbackReader rdr c]
+  (let [c (.read rdr)]
+    (when (= -1 c)
+      (throw (RuntimeException "EOF while reading symbol")))
+    (symbol (str "##" (read-token rdr c)))))
 
 (defmethod read-dispatch-form :default
   [^LineNumberingPushbackReader rdr c]

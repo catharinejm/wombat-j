@@ -134,7 +134,6 @@
                  (quasiquote-pair* x '() '()))))
       res)))
 
-#;
 (define-macro fail
   (lambda (msg)
     `(#:jvm (throwException RuntimeException ,msg))))
@@ -329,19 +328,6 @@
 
 (define fib-print
   (lambda (n m x y)
-    (print "******\n")
-    (print "n: ")
-    (print (obj->str n))
-    (print "\n")
-    (print "m: ")
-    (print (obj->str m))
-    (print "\n")
-    (print "x: ")
-    (print (obj->str x))
-    (print "\n")
-    (print "y: ")
-    (print (obj->str y))
-    (print "\n\n")
     (if (< n m)
       (fib-print (add1 n) m y (+ y x))
       y)))

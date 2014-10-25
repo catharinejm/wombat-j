@@ -95,6 +95,9 @@
      (contains? specials sym)
      (specials sym)
 
+     (contains? @macros sym)
+     sym
+
      (contains? @global-bindings sym)
      sym
 
@@ -102,8 +105,8 @@
      sym
 
      ;; Should this go here? Not sure where else...
-     (contains? @macros sym)
-     (throw (RuntimeException. (str "Can't take the value of a macro: " sym)))
+     ;; (contains? @macros sym)
+     ;; (throw (RuntimeException. (str "Can't take the value of a macro: " sym)))
 
      (maybe-class sym)
      sym
@@ -169,10 +172,7 @@
       #{:jvm} :>> (fn [[_ & insns]]
                     (list* :jvm (map (partial sanitize-jvm env) insns)))
 
-      (let [expanded (expand form)]
-        (if (identical? expanded form)
-          (map (partial sanitize env) form)
-          (recur env expanded))))
+      (map (partial sanitize env) form))
     nil))
 
 (defn sanitize
@@ -479,7 +479,10 @@
   [env context gen form]
   (cond
    (and (list-like? form) (seq form))
-   (emit-seq env context gen form)
+   (let [expanded (expand form)]
+     (if (identical? expanded form)
+       (emit-seq env context gen form)
+       (recur env context gen expanded)))
 
    (list-like? form) ; empty
    (emit-value context gen form)
@@ -517,6 +520,9 @@
 
    (contains? locals sym)
    (. gen loadLocal (get locals sym))
+
+   (contains? @macros sym)
+   (throw (RuntimeException. (str "Can't take the value of a macro: " sym)))
 
    (or (contains? @global-bindings sym)
        (= *current-define* sym))
@@ -640,10 +646,7 @@
 
 (defonce -invoke- (Object.))
 (defmulti emit-seq
-  (fn [_ _ _ form]
-    (if (instance? wombat.datatypes.ICons form)
-      (-car form)
-      (first form)))
+  (fn [_ _ _ form] (first form))
   :default -invoke-)
 
 (defmethod emit-seq 'lambda
