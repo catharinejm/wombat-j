@@ -66,6 +66,8 @@
     'define-class*
     'quote
     'begin
+    'unquote
+    'unquote-splicing
     rest-token})
 
 (defn sanitize-name
@@ -140,7 +142,10 @@
 
 (defn sanitize-let
   [env [_ bindings & body :as form]]
-  (let [sani-binds (map (partial sanitize env) (map second bindings))
+  (let [[name bindings & body] (if (symbol? bindings)
+                                 (cons bindings body)
+                                 (list* nil bindings body))
+        sani-binds (map (partial sanitize env) (map second bindings))
                                         ; Scheme-style let does not extend env with new
                                         ; names until after bindings are evaluated
         [let-env bind-syms] (loop [e env, sani-bs [], bs (map first bindings)]
@@ -149,7 +154,10 @@
                                   (recur (assoc e (first bs) sani)
                                          (conj sani-bs sani)
                                          (rest bs)))
-                                [e sani-bs]))]
+                                [e sani-bs]))
+        let-env (if name
+                  (assoc let-env name (sanitize-name name))
+                  let-env)]
     (debug "let-env: " let-env)
     (list* 'let (map list bind-syms sani-binds) (map (partial sanitize let-env) body))))
 
@@ -211,6 +219,19 @@
    :else
    form))
 
+(declare free-vars)
+(defn quasiquote-free-vars
+  [form]
+  (if (list-like? form)
+    (loop [f form
+           frees (sorted-set)]
+      (if (seq f)
+        (if (#{'unquote 'unquote-splicing} (first f))
+          (reduce into frees (map free-vars (rest f)))
+          (recur (next f) (into frees (quasiquote-free-vars (first f)))))
+        frees))
+    (sorted-set)))
+
 (defn free-vars
   "Returns a sorted-set of free symbols in the given form. Sorting is
   arbitrary, but consistent."
@@ -222,14 +243,19 @@
 
      (['quote val] :seq) (sorted-set)
 
+     (['quasiquote val] :seq) (quasiquote-free-vars val)
+
      (['lambda params & body] :seq)
      (apply disj (free-vars body) (cons *lambda-name* (remove special-token? params)))
 
      ([(:or 'let 'letrec) bindings & body] :seq)
-     (let [bind-frees (map #(free-vars (second %)) bindings)
+     (let [[name bindings & body] (if (symbol? bindings)
+                                    (cons bindings body)
+                                    (list* nil bindings body))
+           bind-frees (map #(free-vars (second %)) bindings)
            body-frees (map free-vars body)]
        (apply disj (reduce into (sorted-set) (concat bind-frees body-frees))
-              (map first bindings)))
+              (cons name (map first bindings))))
 
      (['define name & val] :seq)
      (disj (free-vars val) name)
@@ -692,6 +718,11 @@
 
 ;; (defmethod emit-seq 'define-class*
 ;;   [env context gen [_ fields :as defcls]])
+(defn named-let
+  [[_ name bindings & body]]
+  (list 'letrec
+        (list (list name (list* 'lambda (map first bindings) body)))
+        (list* name (map second bindings))))
 
 (defn emit-let
   [env context ^GeneratorAdapter gen [the-let bindings & body :as form]]
@@ -707,8 +738,10 @@
       (emit-body let-env context gen body))))
 
 (defmethod emit-seq 'let
-  [env context ^GeneratorAdapter gen form]
-  (emit-let env context gen form))
+  [env context ^GeneratorAdapter gen [_ bindings & body :as form]]
+  (if (symbol? bindings)
+    (emit env context gen (named-let form))
+    (emit-let env context gen form)))
 
 (defmethod emit-seq 'letrec
   [env context ^GeneratorAdapter gen letrec]

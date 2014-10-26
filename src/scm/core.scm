@@ -2,6 +2,10 @@
   (lambda (file)
     (#:wombat.compiler/load-file file)))
 
+(define eval
+  (lambda (form)
+    (#:wombat.compiler/eval* form)))
+
 (define list (lambda elems elems))
 
 (define car
@@ -111,6 +115,15 @@
 
 (define quasiquote-pair*
   (lambda (c l ls)
+    (print "c: ")
+    (print (obj->str c))
+    (print "\n")
+    (print "l: ")
+    (print (obj->str l))
+    (print "\n")
+    (print "ls: ")
+    (print (obj->str ls))
+    (print "\n")
     (if (null? c)
       (list 'apply 'concat (cons 'list (reverse (cons (cons 'list (reverse l)) ls))))
       (if (pair? (car c))
@@ -129,9 +142,13 @@
 
 (define-macro quasiquote
   (lambda (x)
-    (let ((res (if (not (pair? x))
-                 (list 'quote x)
-                 (quasiquote-pair* x '() '()))))
+    (let ((res (if (pair? x)
+                 (if (eqv? (car x) 'unquote)
+                   (car (cdr x))
+                   (if (eqv? (car x) 'unquote-splicing)
+                     (#:jvm (throwException RuntimeException "unquote-splicing outside of list!"))
+                     (quasiquote-pair* x '() '())))
+                 (list 'quote x))))
       res)))
 
 (define-macro fail
@@ -146,18 +163,13 @@
                      rest))))
       (foldr c '() conds))))
 
-(define-macro let*
-  (lambda (binds #!rest body)
-    (print "binds: ")
-    (print (obj->str binds))
-    (print " body: ")
-    (print (obj->str body))
-    (print "\n")
-    (let ((let-binds (foldr (lambda (b rest)
-                              (list 'let (list b)
-                                    rest))
-                            '() binds)))
-      (list* let-binds body))))
+;; (define-macro let*
+;;   (lambda (binds #!rest body)
+;;     (let ((let-binds (foldr (lambda (b rest)
+;;                               (list 'let (list b)
+;;                                     rest))
+;;                             '() binds)))
+;;       (list* let-binds body))))
 
 (define last
   (lambda (lis)
@@ -372,10 +384,6 @@
            (#:str s2)
            (invokeVirtual String (String "concat" String)))))
 
-(define eval
-  (lambda (form)
-    (#:wombat.compiler/eval* form)))
-
 (define gensym
   (lambda ()
     (string->symbol (conc "G__#" (str (#:wombat.compiler/next-id))))))
@@ -432,3 +440,18 @@
           (end (#:jvm (invokeStatic System (long "nanoTime")) (box long))))
       (#:printf "time: %.3f ms\n" (#:- (#:/ (#:double end) 1000000) (#:/ (#:double start) 1000000)))
       ret)))
+
+(define gensym
+  (lambda s
+    (if (null? s)
+      (#:wombat.compiler/sanitize-name "G_")
+      (#:wombat.compiler/sanitize-name (str s)))))
+
+(define-macro dotimes
+  (lambda (n #!rest body)
+    (let ((gs (gensym "n")))
+      `(let loop ((,gs ,n))
+         (if (> ,gs 0)
+           (begin
+             ,@body
+             (loop (sub1 ,gs))))))))
