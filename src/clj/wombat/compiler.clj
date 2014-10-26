@@ -223,13 +223,13 @@
      (['quote val] :seq) (sorted-set)
 
      (['lambda params & body] :seq)
-     (apply disj (free-vars body) (remove special-token? params))
+     (apply disj (free-vars body) (cons *lambda-name* (remove special-token? params)))
 
      ([(:or 'let 'letrec) bindings & body] :seq)
-     (apply disj
-            (clojure.set/union (map #(free-vars (second %)) bindings)
-                               (map free-vars body))
-            (map first bindings))
+     (let [bind-frees (map #(free-vars (second %)) bindings)
+           body-frees (map free-vars body)]
+       (apply disj (reduce into (sorted-set) (concat bind-frees body-frees))
+              (map first bindings)))
 
      (['define name & val] :seq)
      (disj (free-vars val) name)
@@ -531,18 +531,22 @@
      (object-array [(str sym)])))
 
 (defn emit-symbol
-  [{:keys [params closed-overs locals thistype] :as env} context gen sym]
+  [{:keys [params closed-overs locals thistype recur-sym] :as env} context gen sym]
+  (debug "emit-symbol: " sym)
   (cond
    ((set params) sym)
    (. gen loadArg (.indexOf params sym))
+
+   (contains? locals sym)
+   (. gen loadLocal (get locals sym))
+
+   (= recur-sym sym)
+   (. gen loadThis)
 
    ((set closed-overs) sym)
    (do
      (. gen loadThis)
      (. gen getField thistype (close-name sym) object-type))
-
-   (contains? locals sym)
-   (. gen loadLocal (get locals sym))
 
    (contains? @macros sym)
    (throw (RuntimeException. (str "Can't take the value of a macro: " sym)))
