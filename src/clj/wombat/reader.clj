@@ -327,7 +327,7 @@
   [^LineNumberingPushbackReader rdr c]
   (let [c (.read rdr)]
     (when (= -1 c)
-      (throw (RuntimeException "EOF while reading symbol")))
+      (throw (RuntimeException. "EOF while reading symbol")))
     (symbol (str "##" (read-token rdr c)))))
 
 (defmethod read-dispatch-form :default

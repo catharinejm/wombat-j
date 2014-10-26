@@ -59,6 +59,7 @@
 (def specials
   #{'lambda
     'let
+    'letrec
     'if
     'define
     'define-macro
@@ -152,7 +153,22 @@
     (debug "let-env: " let-env)
     (list* 'let (map list bind-syms sani-binds) (map (partial sanitize let-env) body))))
 
+(defn sanitize-letrec
+  [env [_ bindings & body :as form]]
+  (let [letrec-env (extend-env env (map first bindings))
+        bind-syms (map #(substitute letrec-env (first %)) bindings)
+        sani-binds (map (partial sanitize letrec-env) (map second bindings))]
+    (list* 'letrec (map list bind-syms sani-binds) (map (partial sanitize letrec-env) body))))
+
 (declare sanitize-jvm)
+
+(defn sanitize-quasiquote
+  [env form]
+  (if (list-like? form)
+    (if (#{'unquote 'unquote-splicing} (first form))
+      (list* (first form) (map (partial sanitize env) (rest form)))
+      (seq->list (map (partial sanitize-quasiquote env) form)))
+    form))
 
 (defn sanitize-seq
   [env form]
@@ -163,11 +179,16 @@
       #{'lambda} :>> (partial sanitize-lambda env)
 
       #{'let} :>> (partial sanitize-let env)
+
+      #{'letrec} :>> (partial sanitize-letrec env)
       
       #{'define 'define-macro} :>> (fn [[define name & val]]
                                      (list* define name (map (partial sanitize (assoc env name name)) val)))
 
-      #{'define-class} form
+      #{'define-class*} form
+
+      #{'quasiquote} :>> (fn [[_ & forms]]
+                           (list* 'quasiquote (map (partial sanitize-quasiquote env) forms)))
 
       #{:jvm} :>> (fn [[_ & insns]]
                     (list* :jvm (map (partial sanitize-jvm env) insns)))
@@ -204,9 +225,10 @@
      (['lambda params & body] :seq)
      (apply disj (free-vars body) (remove special-token? params))
 
-     (['let bindings & body] :seq)
+     ([(:or 'let 'letrec) bindings & body] :seq)
      (apply disj
-            (reduce into (sorted-set) (map #(free-vars (second %)) bindings))
+            (clojure.set/union (map #(free-vars (second %)) bindings)
+                               (map free-vars body))
             (map first bindings))
 
      (['define name & val] :seq)
@@ -228,6 +250,7 @@
 
    (and (symbol? form)
         (not (contains? specials form))
+        (not (contains? @macros form))
         (not (contains? @global-bindings form))
         (not= *current-define* form)
         (not (maybe-class form)))
@@ -666,19 +689,26 @@
 ;; (defmethod emit-seq 'define-class*
 ;;   [env context gen [_ fields :as defcls]])
 
-(defmethod emit-seq 'let
-  [env context ^GeneratorAdapter gen [_ bindings & body :as the-let]]
-  (let [start-label (. gen newLabel)
-        end-label (. gen newLabel)
-        names (mapv #(vector (first %) (. gen newLocal object-type)) bindings)
+(defn emit-let
+  [env context ^GeneratorAdapter gen [the-let bindings & body :as form]]
+  (let [names (mapv #(vector (first %) (. gen newLocal object-type)) bindings)
         vals (mapv second bindings)]
     (dotimes [n (count names)]
       (let [[sym local-id] (nth names n)
             val-expr (nth vals n)]
-        (emit env :context/expression gen val-expr)
+        (binding [*lambda-name* (if (= the-let 'letrec) sym *lambda-name*)]
+          (emit env :context/expression gen val-expr))
         (. gen storeLocal local-id)))
     (let [let-env (update-in env [:locals] merge (into {} names))]
       (emit-body let-env context gen body))))
+
+(defmethod emit-seq 'let
+  [env context ^GeneratorAdapter gen form]
+  (emit-let env context gen form))
+
+(defmethod emit-seq 'letrec
+  [env context ^GeneratorAdapter gen letrec]
+  (emit-let env context gen letrec))
 
 (defmethod emit-seq 'quote
   [env context ^GeneratorAdapter gen [_ quoted :as form]]
@@ -819,13 +849,22 @@
   [[_ & forms]]
   (list* 'if (map explode-invocation forms)))
 
-(defmethod explode-special 'let
-  [_ binds & body]
-  (list* 'let (seq->list (map (fn [bind val]
-                                (list bind
-                                      (explode-invocation val)))
-                              binds))
+(defn explode-let
+  [the-let binds body]
+  (list* the-let
+         (seq->list (map (fn [bind val]
+                           (list bind
+                                 (explode-invocation val)))
+                         binds))
          (map explode-invocation body)))
+
+(defmethod explode-special 'let
+  [the-let binds & body]
+  (explode-let the-let binds body))
+
+(defmethod explode-special 'letrec
+  [letrec binds & body]
+  (explode-let letrec binds body))
 
 (defmethod explode-special 'define
   [_ sym val]
