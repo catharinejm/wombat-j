@@ -135,9 +135,22 @@
       (recur expanded))))
 
 (declare sanitize)
+(defn expand-params
+  [params]
+  (cond
+   (symbol? params)
+   (list rest-token params)
+
+   (instance? wombat.datatypes.Pair params)
+   (reduce -cons (list rest-token (.end params))
+           (reverse (.front params)))
+
+   :else
+   params))
+
 (defn sanitize-lambda
   [env [_ params & body :as form]]
-  (let [params (if (symbol? params) (list rest-token params) params)
+  (let [params (expand-params params)
         lambda-env (extend-env env params)]
     (list* 'lambda (map (partial substitute lambda-env) params) (map (partial sanitize lambda-env) body))))
 

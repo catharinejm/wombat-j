@@ -439,7 +439,7 @@
       (#:wombat.compiler/sanitize-name (str s)))))
 
 (define-macro dotimes
-  (lambda (n #!rest body)
+  (lambda (n . body)
     (let ((gs (gensym "n")))
       `(let loop ((,gs ,n))
          (if (> ,gs 0)
