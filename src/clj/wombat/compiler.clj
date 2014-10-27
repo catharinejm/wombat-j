@@ -192,6 +192,17 @@
       (seq->list (map (partial sanitize-quasiquote env) form)))
     form))
 
+(defn sanitize-define
+  [env [define name & val :as form]]
+  (debug "sanitize-define: " form)
+  (if-not (symbol? name)
+    (let [[name & params] (expand-params name)]
+      (when (or (nil? name)
+                (special-token? name))
+        (throw (IllegalArgumentException. "Invalid lambda define: " form)))
+      (recur env (list define name (list* 'lambda params val))))
+    (list* define name (map (partial sanitize (assoc env name name)) val))))
+
 (defn sanitize-seq
   [env form]
   (if (seq form)
@@ -204,8 +215,7 @@
 
       #{'letrec} :>> (partial sanitize-letrec env)
       
-      #{'define 'define-macro} :>> (fn [[define name & val]]
-                                     (list* define name (map (partial sanitize (assoc env name name)) val)))
+      #{'define 'define-macro} :>> (partial sanitize-define env)
 
       #{'define-class*} form
 
