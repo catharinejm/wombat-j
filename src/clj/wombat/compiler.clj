@@ -235,7 +235,10 @@
   [env form]
   (cond
    (list-like? form)
-   (sanitize-seq env form)
+   (let [expanded (expand form)]
+     (if (identical? expanded form)
+       (sanitize-seq env form)
+       (recur env expanded)))
 
    (symbol? form)
    (substitute env form)
@@ -552,10 +555,7 @@
   [env context gen form]
   (cond
    (and (list-like? form) (seq form))
-   (let [expanded (expand form)]
-     (if (identical? expanded form)
-       (emit-seq env context gen form)
-       (recur env context gen expanded)))
+   (emit-seq env context gen form)
 
    (list-like? form) ; empty
    (emit-value context gen form)
