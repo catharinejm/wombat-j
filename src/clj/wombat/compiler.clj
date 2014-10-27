@@ -184,14 +184,6 @@
 
 (declare sanitize-jvm)
 
-(defn sanitize-quasiquote
-  [env form]
-  (if (list-like? form)
-    (if (#{'unquote 'unquote-splicing} (first form))
-      (list* (first form) (map (partial sanitize env) (rest form)))
-      (seq->list (map (partial sanitize-quasiquote env) form)))
-    form))
-
 (defn sanitize-define
   [env [define name & val :as form]]
   (debug "sanitize-define: " form)
@@ -219,9 +211,6 @@
 
       #{'define-class*} form
 
-      #{'quasiquote} :>> (fn [[_ & forms]]
-                           (list* 'quasiquote (map (partial sanitize-quasiquote env) forms)))
-
       #{:jvm} :>> (fn [[_ & insns]]
                     (list* :jvm (map (partial sanitize-jvm env) insns)))
 
@@ -246,19 +235,6 @@
    :else
    form))
 
-(declare free-vars)
-(defn quasiquote-free-vars
-  [form]
-  (if (list-like? form)
-    (loop [f form
-           frees (sorted-set)]
-      (if (seq f)
-        (if (#{'unquote 'unquote-splicing} (first f))
-          (reduce into frees (map free-vars (rest f)))
-          (recur (next f) (into frees (quasiquote-free-vars (first f)))))
-        frees))
-    (sorted-set)))
-
 (defn free-vars
   "Returns a sorted-set of free symbols in the given form. Sorting is
   arbitrary, but consistent."
@@ -269,8 +245,6 @@
      nil (sorted-set)
 
      (['quote val] :seq) (sorted-set)
-
-     (['quasiquote val] :seq) (quasiquote-free-vars val)
 
      (['lambda params & body] :seq)
      (apply disj (free-vars body) (cons *lambda-name* (remove special-token? params)))
