@@ -1,158 +1,129 @@
-(define load-file
-  (lambda (file)
-    (#:wombat.compiler/load-file file)))
+(define (load-file file)
+  (#:wombat.compiler/load-file file))
 
-(define eval
-  (lambda (form)
-    (#:wombat.compiler/eval* form)))
+(define (eval form)
+  (#:wombat.compiler/eval* form))
 
-(define list (lambda elems elems))
+(define (list . elems) elems)
 
-(define car
-  (lambda (lis)
-    (#:wombat.datatypes/car lis)))
+(define (car lis)
+  (#:wombat.datatypes/car lis))
 
-(define cdr
-  (lambda (lis)
-    (#:wombat.datatypes/cdr lis)))
+(define (cdr lis)
+  (#:wombat.datatypes/cdr lis))
 
-(define cons
-  (lambda (a d)
-    (#:wombat.datatypes/cons a d)))
+(define (cons a d)
+  (#:wombat.datatypes/cons a d))
 
 ;; This is NOT recursive!
 ;; (if (null? ...) ...) is a special case in the compiler!
-(define null?
-  (lambda (o)
-    (if (null? o)
-      #t
-      #f)))
+(define (null? o)
+  (if (null? o)
+    #t
+    #f))
 
-(define not
-  (lambda (o)
-    (if o
-      #f
-      #t)))
+(define (not o)
+  (if o
+    #f
+    #t))
 
-(define foldl
-  (lambda (f init vals)
-    (if (null? vals)
-      init
-      (foldl f (f (car vals) init) (cdr vals)))))
+(define (foldl f init vals)
+  (if (null? vals)
+    init
+    (foldl f (f (car vals) init) (cdr vals))))
 
-(define foldr
-  (lambda (f init vals)
-    (if (null? vals)
-      init
-      (f (car vals) (foldr f init (cdr vals))))))
+(define (foldr f init vals)
+  (if (null? vals)
+    init
+    (f (car vals) (foldr f init (cdr vals)))))
 
-(define map
-  (lambda (f lis)
-    (foldr (lambda (x xs)
-             (cons (f x) xs)) '() lis)))
+(define (map f lis)
+  (foldr (lambda (x xs)
+           (cons (f x) xs)) '() lis))
 
-(define cat*
-  (lambda (l1 l2)
-    (foldr cons l2 l1)))
+(define (cat* l1 l2)
+  (foldr cons l2 l1))
 
-(define concat
-  (lambda ls
-    (foldr cat* '() ls)))
+(define (concat . ls)
+  (foldr cat* '() ls))
 
-(define eqv?
-  (lambda (a b)
-    (if (null? a)
-      (null? b)
-      (#:jvm (#:emit a)
-             (#:emit b)
-             (invokeVirtual Object (boolean "equals" Object))
-             (box boolean)))))
+(define (eqv? a b)
+  (if (null? a)
+    (null? b)
+    (#:jvm (#:emit a)
+           (#:emit b)
+           (invokeVirtual Object (boolean "equals" Object))
+           (box boolean))))
 
-(define list?
-  (lambda (x)
-    (#:wombat.datatypes/list? x)))
+(define (list? x)
+  (#:wombat.datatypes/list? x))
 
-(define pair?
-  (lambda (x)
-    (#:wombat.datatypes/pair? x)))
+(define (pair? x)
+  (#:wombat.datatypes/pair? x))
 
-(define print
-  (lambda (o)
-    (#:print o)))
+(define (print o)
+  (#:print o))
 
-(define expand
-  (lambda (f)
-    (#:wombat.compiler/expand f)))
+(define (expand f)
+  (#:wombat.compiler/expand f))
 
-(define obj->str
-  (lambda (o)
-    (#:wombat.printer/write-str o)))
+(define (obj->str o)
+  (#:wombat.printer/write-str o))
 
-(define reverse
-  (lambda (lis)
-    (foldl cons '() lis)))
+(define (reverse lis)
+  (foldl cons '() lis))
 
-(define list*
-  (lambda ls
-    (if (null? ls)
-      '()
-      (let ((rlis (reverse ls)))
-        (if (not (list? (car rlis)))
-          (#:jvm (throwException IllegalArgumentException "list* expects list as final arg")))
-        (foldl cons (car rlis) (cdr rlis))))))
+(define (list* . ls)
+  (if (null? ls)
+    '()
+    (let ((rlis (reverse ls)))
+      (if (not (list? (car rlis)))
+        (#:jvm (throwException IllegalArgumentException "list* expects list as final arg")))
+      (foldl cons (car rlis) (cdr rlis)))))
 
-(define foobar
-  (lambda ()
-    (list 'foldl 'concat '() (list* 'list (reverse '(1 2 3)) '((list 4 5))))))
+(define (apply f args)
+  (#:jvm (#:emit f)
+         (checkCast wombat.ILambda)
+         (#:invoke #:object-array args)
+         (checkCast (Object))
+         (invokeStatic wombat.Global (Object "invokeLambda" wombat.ILambda (Object)))))
 
-(define apply
-  (lambda (f args)
-    (#:jvm (#:emit f)
-           (checkCast wombat.ILambda)
-           (#:invoke #:object-array args)
-           (checkCast (Object))
-           (invokeStatic wombat.Global (Object "invokeLambda" wombat.ILambda (Object))))))
-
-(define quasiquote-pair*
-  (lambda (c l ls)
-    (if (null? c)
-      (list 'apply 'concat (cons 'list (reverse (cons (cons 'list (reverse l)) ls))))
-      (if (pair? (car c))
-        (if (eqv? (car (car c)) 'unquote)
+(define (quasiquote-pair* c l ls)
+  (if (null? c)
+    (list 'apply 'concat (cons 'list (reverse (cons (cons 'list (reverse l)) ls))))
+    (if (pair? (car c))
+      (if (eqv? (car (car c)) 'unquote)
+        (quasiquote-pair* (cdr c)
+                          (cons (car (cdr (car c))) l)
+                          ls)
+        (if (eqv? (car (car c)) 'unquote-splicing)
           (quasiquote-pair* (cdr c)
-                            (cons (car (cdr (car c))) l)
-                            ls)
-          (if (eqv? (car (car c)) 'unquote-splicing)
-            (quasiquote-pair* (cdr c)
-                              '()
-                              (list* (car (cdr (car c))) (cons 'list (reverse l)) ls))
-            (quasiquote-pair* (cdr c)
-                              (cons (quasiquote-pair* (car c) '() '()) l)
-                              ls)))
-        (quasiquote-pair* (cdr c) (cons (list 'quote (car c)) l) ls)))))
+                            '()
+                            (list* (car (cdr (car c))) (cons 'list (reverse l)) ls))
+          (quasiquote-pair* (cdr c)
+                            (cons (quasiquote-pair* (car c) '() '()) l)
+                            ls)))
+      (quasiquote-pair* (cdr c) (cons (list 'quote (car c)) l) ls))))
 
-(define-macro quasiquote
-  (lambda (x)
-    (let ((res (if (pair? x)
-                 (if (eqv? (car x) 'unquote)
-                   (car (cdr x))
-                   (if (eqv? (car x) 'unquote-splicing)
-                     (#:jvm (throwException RuntimeException "unquote-splicing outside of list!"))
-                     (quasiquote-pair* x '() '())))
-                 (list 'quote x))))
-      res)))
+(define-macro (quasiquote x)
+  (let ((res (if (pair? x)
+               (if (eqv? (car x) 'unquote)
+                 (car (cdr x))
+                 (if (eqv? (car x) 'unquote-splicing)
+                   (#:jvm (throwException RuntimeException "unquote-splicing outside of list!"))
+                   (quasiquote-pair* x '() '())))
+               (list 'quote x))))
+    res))
 
-(define-macro fail
-  (lambda (msg)
-    `(#:jvm (throwException RuntimeException ,msg))))
+(define-macro (fail msg)
+  `(#:jvm (throwException RuntimeException ,msg)))
 
-(define-macro cond
-  (lambda conds
-    (let ((c (lambda (c rest)
-               (list 'if (car c)
-                     (car (cdr c))
-                     rest))))
-      (foldr c '() conds))))
+(define-macro (cond . conds)
+  (let ((c (lambda (c rest)
+             (list 'if (car c)
+                   (car (cdr c))
+                   rest))))
+    (foldr c '() conds)))
 
 ;; (define-macro let*
 ;;   (lambda (binds #!rest body)
@@ -162,25 +133,22 @@
 ;;                             '() binds)))
 ;;       (list* let-binds body))))
 
-(define last
-  (lambda (lis)
-    (if (null? lis)
-      '()
-      (if (null? (cdr lis))
-        (car lis)
-        (last (cdr lis))))))
+(define (last lis)
+  (if (null? lis)
+    '()
+    (if (null? (cdr lis))
+      (car lis)
+      (last (cdr lis)))))
 
-(define instance?
-  (lambda (cls o)
-    (#:jvm (#:emit cls)
-           (checkCast Class)
-           (#:emit o)
-           (invokeVirtual Class (boolean "isInstance" Object))
-           (box boolean))))
+(define (instance? cls o)
+  (#:jvm (#:emit cls)
+         (checkCast Class)
+         (#:emit o)
+         (invokeVirtual Class (boolean "isInstance" Object))
+         (box boolean)))
 
-(define string?
-  (lambda (o)
-    (instance? String o)))
+(define (string? o)
+  (instance? String o))
 
 ;; (define-macro new
 ;;   (lambda (c)
@@ -206,179 +174,149 @@
 ;;                  (call (StringBuilder sb) (StringBuilder "append" String))
 ;;                  (call (StringBuilder sb) (StringBuilder "append"))))))))
 
-(define namespace
-  (lambda (named)
-    (#:jvm (#:emit named)
-           (checkCast clojure.lang.Named)
-           (invokeInterface clojure.lang.Named (String "getNamespace")))))
+(define (namespace named)
+  (#:jvm (#:emit named)
+         (checkCast clojure.lang.Named)
+         (invokeInterface clojure.lang.Named (String "getNamespace"))))
 
-(define name
-  (lambda (named)
-    (#:jvm (#:emit named)
-           (checkCast clojure.lang.Named)
-           (invokeInterface clojure.lang.Named (String "getName")))))
+(define (name named)
+  (#:jvm (#:emit named)
+         (checkCast clojure.lang.Named)
+         (invokeInterface clojure.lang.Named (String "getName"))))
 
-(define get-var
-  (lambda (sym)
-    (#:jvm (#:invoke namespace sym)
-           (checkCast String)
-           (#:invoke name sym)
-           (checkCast String)
-           (invokeStatic clojure.lang.RT (clojure.lang.Var "var" String String)))))
+(define (get-var sym)
+  (#:jvm (#:invoke namespace sym)
+         (checkCast String)
+         (#:invoke name sym)
+         (checkCast String)
+         (invokeStatic clojure.lang.RT (clojure.lang.Var "var" String String))))
 
-(define class
-  (lambda (obj)
-    (if (null? obj)
-      '()
-      (#:jvm (#:emit obj)
-             (invokeVirtual Object (Class "getClass"))))))
+(define (class obj)
+  (if (null? obj)
+    '()
+    (#:jvm (#:emit obj)
+           (invokeVirtual Object (Class "getClass")))))
 
-(define add1
-  (lambda (n)
-    (#:jvm (#:emit n)
-           (checkCast Number)
-           (invokeVirtual Number (long "longValue"))
-           (push long 1)
-           (add long)
-           (box long))))
+(define (add1 n)
+  (#:jvm (#:emit n)
+         (checkCast Number)
+         (invokeVirtual Number (long "longValue"))
+         (push long 1)
+         (add long)
+         (box long)))
 
-(define sub1
-  (lambda (n)
-    (#:jvm (#:emit n)
-           (checkCast Number)
-           (invokeVirtual Number (long "longValue"))
-           (push long 1)
-           (sub long)
-           (box long))))
+(define (sub1 n)
+  (#:jvm (#:emit n)
+         (checkCast Number)
+         (invokeVirtual Number (long "longValue"))
+         (push long 1)
+         (sub long)
+         (box long)))
 
-(define +
-  (lambda (x y)
-    (#:jvm (#:emit x)
-           (checkCast Number)
-           (invokeVirtual Number (long "longValue"))
-           (#:emit y)
-           (checkCast Number)
-           (invokeVirtual Number (long "longValue"))
-           (add long)
-           (box long))))
+(define (+ x y)
+  (#:jvm (#:emit x)
+         (checkCast Number)
+         (invokeVirtual Number (long "longValue"))
+         (#:emit y)
+         (checkCast Number)
+         (invokeVirtual Number (long "longValue"))
+         (add long)
+         (box long)))
 
-(define -
-  (lambda (x y)
-    (#:jvm (#:emit x)
-           (checkCast Number)
-           (invokeVirtual Number (long "longValue"))
-           (#:emit y)
-           (checkCast Number)
-           (invokeVirtual Number (long "longValue"))
-           (sub long)
-           (box long))))
+(define (- x y)
+  (#:jvm (#:emit x)
+         (checkCast Number)
+         (invokeVirtual Number (long "longValue"))
+         (#:emit y)
+         (checkCast Number)
+         (invokeVirtual Number (long "longValue"))
+         (sub long)
+         (box long)))
 
-(define *
-  (lambda (x y)
-    (#:jvm (#:emit x)
-           (checkCast Number)
-           (invokeVirtual Number (long "longValue"))
-           (#:emit y)
-           (checkCast Number)
-           (invokeVirtual Number (long "longValue"))
-           (mul long)
-           (box long))))
+(define (* x y)
+  (#:jvm (#:emit x)
+         (checkCast Number)
+         (invokeVirtual Number (long "longValue"))
+         (#:emit y)
+         (checkCast Number)
+         (invokeVirtual Number (long "longValue"))
+         (mul long)
+         (box long)))
 
-(define <
-  (lambda (x y)
-    (#:jvm (#:emit x)
-           (checkCast Number)
-           (invokeVirtual Number (long "longValue"))
-           (#:emit y)
-           (checkCast Number)
-           (invokeVirtual Number (long "longValue"))
-           (ifCmp long < #:is-less)
-           (#:emit #f)
-           (goto #:end)
-           (label #:is-less)
-           (#:emit #t)
-           (label #:end))))
+(define (< x y)
+  (#:jvm (#:emit x)
+         (checkCast Number)
+         (invokeVirtual Number (long "longValue"))
+         (#:emit y)
+         (checkCast Number)
+         (invokeVirtual Number (long "longValue"))
+         (ifCmp long < #:is-less)
+         (#:emit #f)
+         (goto #:end)
+         (label #:is-less)
+         (#:emit #t)
+         (label #:end)))
 
-(define >
-  (lambda (x y)
-    (#:jvm (#:emit x)
-           (checkCast Number)
-           (invokeVirtual Number (long "longValue"))
-           (#:emit y)
-           (checkCast Number)
-           (invokeVirtual Number (long "longValue"))
-           (ifCmp long > #:is-more)
-           (#:emit #f)
-           (goto #:end)
-           (label #:is-more)
-           (#:emit #t)
-           (label #:end))))
+(define (> x y)
+  (#:jvm (#:emit x)
+         (checkCast Number)
+         (invokeVirtual Number (long "longValue"))
+         (#:emit y)
+         (checkCast Number)
+         (invokeVirtual Number (long "longValue"))
+         (ifCmp long > #:is-more)
+         (#:emit #f)
+         (goto #:end)
+         (label #:is-more)
+         (#:emit #t)
+         (label #:end)))
 
-(define =
-  (lambda (x y)
-    (#:jvm (#:emit x)
-           (checkCast Number)
-           (invokeVirtual Number (long "longValue"))
-           (#:emit y)
-           (checkCast Number)
-           (invokeVirtual Number (long "longValue"))
-           (ifCmp long = #:are-equal)
-           (#:emit #f)
-           (goto #:end)
-           (label #:are-equal)
-           (#:emit #t)
-           (label #:end))))
+(define (= x y)
+  (#:jvm (#:emit x)
+         (checkCast Number)
+         (invokeVirtual Number (long "longValue"))
+         (#:emit y)
+         (checkCast Number)
+         (invokeVirtual Number (long "longValue"))
+         (ifCmp long = #:are-equal)
+         (#:emit #f)
+         (goto #:end)
+         (label #:are-equal)
+         (#:emit #t)
+         (label #:end)))
 
-(define fib-print
-  (lambda (n m x y)
-    (if (< n m)
-      (fib-print (add1 n) m y (+ y x))
-      y)))
+(define (fac n)
+  (if (< n 2)
+    1
+    (* (fac (sub1 n)) n)))
 
-(define fac
-  (lambda (n)
-    (if (< n 2)
-      1
-      (* (fac (sub1 n)) n))))
+(define (sum-to n)
+  (if (> n 0)
+    (+ (sum-to (sub1 n)) n)
+    0))
 
-(define sum-to
-  (lambda (n)
-    (if (> n 0)
-      (+ (sum-to (sub1 n)) n)
-      0)))
+(define (fib n)
+  (if (< n 2)
+    1
+    (+ (fib (sub1 n)) (fib (- n 2)))))
 
-(define fib
-  (lambda (n)
-    (if (< n 2)
-      1
-      (+ (fib (sub1 n)) (fib (- n 2))))))
+(define (fib* n m x y)
+  (if (< n m)
+    (fib* (add1 n) m y (+ x y))
+    y))
 
-(define fib*
-  (lambda (n m x y)
-    (if (< n m)
-      (fib* (add1 n) m y (+ x y))
-      y)))
+(define (string->symbol str)
+  (#:jvm (#:emit str)
+         (checkCast String)
+         (invokeStatic clojure.lang.Symbol (clojure.lang.Symbol "intern" String))))
 
-(define string->symbol
-  (lambda (str)
-    (#:jvm (#:emit str)
-           (checkCast String)
-           (invokeStatic clojure.lang.Symbol (clojure.lang.Symbol "intern" String)))))
+(define (str val)
+  (#:jvm (#:str val)))
 
-(define str
-  (lambda (val)
-    (#:jvm (#:str val))))
-
-(define conc
-  (lambda (s1 s2)
-    (#:jvm (#:str s1)
-           (#:str s2)
-           (invokeVirtual String (String "concat" String)))))
-
-(define gensym
-  (lambda ()
-    (string->symbol (conc "G__#" (str (#:wombat.compiler/next-id))))))
-
+(define (conc s1 s2)
+  (#:jvm (#:str s1)
+         (#:str s2)
+         (invokeVirtual String (String "concat" String))))
 
 ;; (define define-record
 ;;   (lambda (rname fields)
@@ -396,53 +334,44 @@
 
 
 (define doit2)
-(define doit
-  (lambda (n)
-    (if (> n 0)
-      (doit2 (sub1 n))
-      (print "Done!\n"))))
-(define doit2
-  (lambda (n)
-    (doit n)))
+(define (doit n)
+  (if (> n 0)
+    (doit2 (sub1 n))
+    (print "Done!\n")))
+(define (doit2 n)
+  (doit n))
 
 
 (define m4)
 (define m3)
 (define m2)
-(define m1
-  (lambda (n)
-    (if (> n 0)
-      (m2 (sub1 n))
-      (print "done!\n"))))
-(define m2
-  (lambda (n)
-    (m3 n)))
-(define m3
-  (lambda (n)
-    (m4 n)))
-(define m4
-  (lambda (n)
-    (m1 n)))
+(define (m1 n)
+  (if (> n 0)
+    (m2 (sub1 n))
+    (print "done!\n")))
+(define (m2 n)
+  (m3 n))
+(define (m3 n)
+  (m4 n))
+(define (m4 n)
+  (m1 n))
 
-(define time
-  (lambda (thunk)
-    (let ((start (#:jvm (invokeStatic System (long "nanoTime")) (box long)))
-          (ret (thunk))
-          (end (#:jvm (invokeStatic System (long "nanoTime")) (box long))))
-      (#:printf "time: %.3f ms\n" (#:- (#:/ (#:double end) 1000000) (#:/ (#:double start) 1000000)))
-      ret)))
+(define (time thunk)
+  (let ((start (#:jvm (invokeStatic System (long "nanoTime")) (box long)))
+        (ret (thunk))
+        (end (#:jvm (invokeStatic System (long "nanoTime")) (box long))))
+    (#:printf "time: %.3f ms\n" (#:- (#:/ (#:double end) 1000000) (#:/ (#:double start) 1000000)))
+    ret))
 
-(define gensym
-  (lambda s
-    (if (null? s)
-      (#:wombat.compiler/sanitize-name "G_")
-      (#:wombat.compiler/sanitize-name (str s)))))
+(define (gensym . s)
+  (if (null? s)
+    (#:wombat.compiler/sanitize-name "G_")
+    (#:wombat.compiler/sanitize-name (str s))))
 
-(define-macro dotimes
-  (lambda (n . body)
-    (let ((gs (gensym "n")))
-      `(let loop ((,gs ,n))
-         (if (> ,gs 0)
-           (begin
-             ,@body
-             (loop (sub1 ,gs))))))))
+(define-macro (dotimes n . body)
+  (let ((gs (gensym "n")))
+    `(let loop ((,gs ,n))
+       (if (> ,gs 0)
+         (begin
+           ,@body
+           (loop (sub1 ,gs)))))))
