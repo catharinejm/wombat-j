@@ -119,11 +119,12 @@
     sym))
 
 (defn expand1
-  [[maybe-macro & args :as form]]
-  (if (and (not (contains? specials maybe-macro))
-           (contains? @macros maybe-macro))
-    (let [^ILambda macro (@macros maybe-macro)]
-      (Global/invokeLambda macro (object-array args)))
+  [form]
+  (if (and (list-like? form)
+           (not (contains? specials (first form)))
+           (contains? @macros (first form)))
+    (let [^ILambda macro (@macros (first form))]
+      (Global/invokeLambda macro (object-array (rest form))))
     form))
 
 (defn expand

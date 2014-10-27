@@ -115,15 +115,6 @@
 
 (define quasiquote-pair*
   (lambda (c l ls)
-    (print "c: ")
-    (print (obj->str c))
-    (print "\n")
-    (print "l: ")
-    (print (obj->str l))
-    (print "\n")
-    (print "ls: ")
-    (print (obj->str ls))
-    (print "\n")
     (if (null? c)
       (list 'apply 'concat (cons 'list (reverse (cons (cons 'list (reverse l)) ls))))
       (if (pair? (car c))
