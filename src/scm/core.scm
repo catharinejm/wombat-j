@@ -125,13 +125,9 @@
                    rest))))
     (foldr c '() conds)))
 
-;; (define-macro let*
-;;   (lambda (binds #!rest body)
-;;     (let ((let-binds (foldr (lambda (b rest)
-;;                               (list 'let (list b)
-;;                                     rest))
-;;                             '() binds)))
-;;       (list* let-binds body))))
+(define-macro (let* binds . body)
+  (foldr (lambda (l r) (list 'let (list l) r))
+         (cons 'begin body) binds))
 
 (define (last lis)
   (if (null? lis)
