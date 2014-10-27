@@ -1,24 +1,18 @@
 package wombat;
 
 import java.lang.invoke.*;
-
-import clojure.lang.RT;
-import clojure.lang.IPersistentMap;
-import clojure.lang.Symbol;
-import clojure.lang.Atom;
-import clojure.lang.Var;
-import clojure.lang.Util;
-import clojure.lang.DynamicClassLoader;
+import clojure.lang.*;
 
 public class Global {
     public final static Var COMPILER_BINDINGS = RT.var("wombat.compiler", "global-bindings");
     public final static Var LOADER = RT.var("wombat.compiler", "*class-loader*");
     public final static Var JAVALIST_TO_LIST = RT.var("wombat.datatypes", "javalist->list");
+    final static Keyword CALLSITE = Keyword.intern("call-site");
     
     public static CallSite getCallSite(Symbol name) {
         Atom bindAtom = (Atom) COMPILER_BINDINGS.deref();
         IPersistentMap bindings = (IPersistentMap) bindAtom.deref();
-        return (CallSite) bindings.valAt(name);
+        return (CallSite) RT.get(RT.get(bindings, name), CALLSITE);
     }
 
     public static Object getGlobal(Symbol name) {

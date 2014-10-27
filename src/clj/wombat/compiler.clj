@@ -33,7 +33,6 @@
     (apply println vals)))
 
 (def global-bindings (atom {}))
-(def macros (atom {}))
 (def ^:dynamic *current-define* nil)
 (def ^:dynamic *lambda-name* nil)
 (def ^:dynamic *top-level* nil)
@@ -98,18 +97,11 @@
      (contains? specials sym)
      (specials sym)
 
-     (contains? @macros sym)
-     sym
-
      (contains? @global-bindings sym)
      sym
 
      (= *current-define* sym)
      sym
-
-     ;; Should this go here? Not sure where else...
-     ;; (contains? @macros sym)
-     ;; (throw (RuntimeException. (str "Can't take the value of a macro: " sym)))
 
      (maybe-class sym)
      sym
@@ -122,8 +114,9 @@
   [form]
   (if (and (list-like? form)
            (not (contains? specials (first form)))
-           (contains? @macros (first form)))
-    (let [^ILambda macro (@macros (first form))]
+           (contains? @global-bindings (first form))
+           (:macro (@global-bindings (first form))))
+    (let [^ILambda macro (get-in @global-bindings [(first form) :macro])]
       (Global/invokeLambda macro (object-array (rest form))))
     form))
 
@@ -277,7 +270,6 @@
 
    (and (symbol? form)
         (not (contains? specials form))
-        (not (contains? @macros form))
         (not (contains? @global-bindings form))
         (not= *current-define* form)
         (not (maybe-class form)))
@@ -549,6 +541,8 @@
 
 (defn emit-global
   [^GeneratorAdapter gen sym]
+  (when (:macro (@global-bindings sym))
+    (throw (RuntimeException. "Can't take the value of a macro: " sym)))
   (. gen invokeDynamic "getGlobal"
      (.toMethodDescriptorString (MethodType/methodType Object (make-array Class 0)))
      global-bootstrap
@@ -571,9 +565,6 @@
    (do
      (. gen loadThis)
      (. gen getField thistype (close-name sym) object-type))
-
-   (contains? @macros sym)
-   (throw (RuntimeException. (str "Can't take the value of a macro: " sym)))
 
    (or (contains? @global-bindings sym)
        (= *current-define* sym))
@@ -755,20 +746,33 @@
   [env context ^GeneratorAdapter gen [_ & exprs :as form]]
   (emit-body env context gen exprs))
 
+(defn update-global-handle
+  ^CallSite [sym ^MethodHandle handle]
+  (if-let [^CallSite s (get-in @global-bindings [sym :call-site])]
+    (doto s (.setTarget handle))
+    (VolatileCallSite. handle)))
+
 (defn set-global!
   [sym value]
   (cast Symbol sym)
-  (let [handle (MethodHandles/constant Object value)]
-    (if (contains? @global-bindings sym)
-      (.setTarget ^CallSite (@global-bindings sym) handle)
-      (swap! global-bindings assoc sym (VolatileCallSite. handle))))
+  (let [handle (MethodHandles/constant Object value)
+        site (update-global-handle sym handle)]
+    (swap! global-bindings assoc sym {:call-site site}))
   value)
+
+(defn macro-handle
+  [sym]
+  (. (MethodHandles/throwException Object RuntimeException)
+     (bindTo (RuntimeException. (str "Can't take the value of a macro: " sym)))))
 
 (defn set-macro!
   [sym value]
   (cast Symbol sym)
   (cast ILambda value)
-  (swap! macros assoc sym value)
+  (let [handle (macro-handle sym)
+        site (update-global-handle sym handle)]
+    (swap! global-bindings assoc sym {:macro value
+                                      :call-site site}))
   sym)
 
 (defmethod emit-seq 'define
