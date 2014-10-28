@@ -7,4 +7,6 @@ public interface ILambda {
 
     // thunk needed for continuations
     public Object invoke();
+
+    public Object applyTo(Object list);
 }

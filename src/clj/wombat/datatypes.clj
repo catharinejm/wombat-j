@@ -35,7 +35,7 @@
   (assert-list! o)
   (-length o))
 
-(deftype List [head ^List tail ^int cnt]
+(deftype List [head tail ^int cnt]
   ICons
   (-cons [l o]
     (List. o l (inc cnt)))
@@ -68,7 +68,7 @@
               ()
               tail)))
 
-(deftype Pair [^List front end]
+(deftype Pair [^wombat.datatypes.List front end]
   ICons
   (-cons [p o]
     (Pair. (-cons front o) end))

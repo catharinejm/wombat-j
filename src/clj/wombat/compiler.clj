@@ -370,6 +370,105 @@
     (. gen returnValue)
     (. gen endMethod)))
 
+(defn emit-arity-exception
+  [^GeneratorAdapter gen proper-arity restarg given-arity-fn]
+  (. gen newInstance (asmtype IllegalArgumentException))
+  (. gen dup)
+  (. gen newInstance (asmtype StringBuilder))
+  (. gen dup)
+  (. gen invokeConstructor (asmtype StringBuilder) void-ctor)
+  (. gen push "Wrong number of args (")
+  (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "StringBuilder append(String)"))
+  (given-arity-fn)
+  (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "StringBuilder append(int)"))
+  (. gen push (str " for " proper-arity (when restarg "+") ")"))
+  (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "StringBuilder append(String)"))
+  (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "String toString()"))
+  (. gen invokeConstructor (asmtype IllegalArgumentException) (Method/getMethod "void <init>(String)"))
+  (. gen throwException))
+
+(declare emit-var)
+(defn asm-println
+  "Generates bytecode to print the toString of whatever is on top of
+  the stack. Leaves stack unchaged."
+  [^GeneratorAdapter gen]
+  (. gen dup)
+  (emit-var gen 'clojure.core/*out*)
+  (. gen invokeVirtual (asmtype clojure.lang.Var) (Method/getMethod "Object deref()"))
+  (. gen checkCast (asmtype java.io.Writer))
+  (. gen dup)
+  (. gen push "DEBUG: ")
+  (. gen invokeVirtual (asmtype java.io.Writer) (Method/getMethod "void write(String)"))
+  (. gen push "wombat.printer")
+  (. gen push "write-obj")
+  (. gen invokeStatic (asmtype RT) (Method/getMethod "clojure.lang.Var var(String,String)"))
+  (. gen dupX2)
+  (. gen pop)
+  (. gen invokeVirtual (asmtype clojure.lang.Var) (Method/getMethod "Object invoke(Object,Object)"))
+  (. gen pop)
+  (emit-var gen 'clojure.core/println)
+  (. gen invokeVirtual (asmtype clojure.lang.Var) (Method/getMethod "Object invoke()"))
+  (. gen pop))
+
+(defn gen-applier
+  [^ClassWriter cw {:keys [params restarg ^Type thistype] :as env}]
+  (let [gen (GeneratorAdapter. Opcodes/ACC_PUBLIC (Method/getMethod "Object applyTo(Object)") nil nil cw)
+        bad-arity (. gen newLabel)
+        invoke-label (. gen newLabel)
+        loop-start (. gen newLabel)
+        list-local (. gen newLocal (asmtype wombat.datatypes.List))
+        positional-args (repeat (count params) object-type)
+        sig (into-array Type (if restarg
+                               (conj (vec positional-args) (asmtype object-array-class))
+                               positional-args))
+        method (Method. "invoke" object-type sig)
+        emit-list-cnt (fn []
+                        (let [is-null (. gen newLabel)
+                              end (. gen newLabel)]
+                          (. gen loadLocal list-local)
+                          (. gen dup)
+                          (. gen ifNull is-null)
+                          (. gen getField (asmtype wombat.datatypes.List) "cnt" Type/INT_TYPE)
+                          (. gen goTo end)
+                          (. gen mark is-null)
+                          (. gen pop)
+                          (AsmUtil/pushInt gen 0)
+                          (. gen mark end)))]
+    (. gen visitCode)
+    
+    (. gen loadArg 0)
+    (. gen checkCast (asmtype wombat.datatypes.List))
+    (. gen storeLocal list-local)
+    
+    (emit-list-cnt)
+    (AsmUtil/pushInt gen (count params))
+    (if restarg
+      (. gen ifCmp Type/INT_TYPE GeneratorAdapter/LT bad-arity)
+      (. gen ifCmp Type/INT_TYPE GeneratorAdapter/NE bad-arity))
+
+    (. gen loadThis)
+    (. gen loadLocal list-local)
+    (dotimes [_ (count params)]
+      (. gen dup)
+      (. gen getField (asmtype wombat.datatypes.List) "head" object-type)
+      (. gen swap)
+      (. gen getField (asmtype wombat.datatypes.List) "tail" object-type)
+      (. gen checkCast (asmtype wombat.datatypes.List)))
+
+    (if restarg
+      (. gen invokeStatic (asmtype RT) (Method/getMethod "Object[] seqToArray(clojure.lang.ISeq)"))
+      (. gen pop))
+
+    (. gen goTo invoke-label)
+
+    (. gen mark bad-arity)
+    (emit-arity-exception gen (count params) restarg emit-list-cnt)
+    (. gen mark invoke-label)
+
+    (. gen invokeVirtual thistype method)
+    (. gen returnValue)
+    (. gen endMethod)))
+
 (defn emit-array
   [^GeneratorAdapter gen type contents]
   (let [contents (seq contents)]
@@ -448,21 +547,7 @@
       (. gen goTo end-label)
       
       (. gen mark false-label)
-      (. gen newInstance (asmtype IllegalArgumentException))
-      (. gen dup)
-      (. gen newInstance (asmtype StringBuilder))
-      (. gen dup)
-      (. gen invokeConstructor (asmtype StringBuilder) void-ctor)
-      (. gen push "Wrong number of args (")
-      (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "StringBuilder append(String)"))
-      (. gen loadArg 0)
-      (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "StringBuilder append(int)"))
-      (. gen push (str " for " arity (when restarg "+") ")"))
-      (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "StringBuilder append(String)"))
-      (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "String toString()"))
-      (. gen invokeConstructor (asmtype IllegalArgumentException) (Method/getMethod "void <init>(String)"))
-      (. gen throwException)
-
+      (emit-arity-exception gen arity restarg #(. gen loadArg 0))
       (. gen mark end-label)
       (. gen returnValue)
       (. gen endMethod))))
@@ -511,6 +596,7 @@
         (gen-closure-fields cw fv)
         (gen-ctor cw fqname fv)
         (gen-body cw env body)
+        (gen-applier cw env)
         (gen-handle cw env)
         (. cw visitEnd))
       (swap! *compiled-lambdas* conj lambda)
@@ -827,23 +913,6 @@
     (. gen mark false-label)
     (emit env context gen else)
     (. gen mark end-label)))
-
-(defn asm-println
-  "Generates bytecode to print the toString of whatever is on top of
-  the stack. Leaves stack unchaged."
-  [^GeneratorAdapter gen]
-  (. gen dup)
-  (. gen invokeVirtual object-type (Method/getMethod "String toString()"))
-  (. gen push "DEBUG: ")
-  (. gen swap)
-  (. gen invokeVirtual (asmtype String) (Method/getMethod "String concat(String)"))
-  (. gen push "clojure.core")
-  (. gen push "*out*")
-  (. gen invokeStatic (asmtype RT) (Method/getMethod "clojure.lang.Var var(String,String)"))
-  (. gen invokeVirtual (asmtype clojure.lang.Var) (Method/getMethod "Object deref()"))
-  (. gen checkCast (asmtype java.io.PrintWriter))
-  (. gen swap)
-  (. gen invokeVirtual (asmtype java.io.PrintWriter) (Method/getMethod "void println(String)")))
 
 (defn emit-var
   [^GeneratorAdapter gen sym]

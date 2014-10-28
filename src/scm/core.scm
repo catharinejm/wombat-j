@@ -87,9 +87,10 @@
 (define (apply f args)
   (#:jvm (#:emit f)
          (checkCast wombat.ILambda)
-         (#:invoke #:object-array args)
-         (checkCast (Object))
-         (invokeStatic wombat.Global (Object "invokeLambda" wombat.ILambda (Object)))))
+         (#:emit args)
+         (invokeInterface wombat.ILambda (Object "applyTo" Object))
+         ;; 'handle-continuation' will no-op if compiler has *return-continuations* set
+         (#:handle-continuation)))
 
 (define (quasiquote-pair* c l ls)
   (if (null? c)
