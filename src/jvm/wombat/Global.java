@@ -11,8 +11,7 @@ public class Global {
     
     public static CallSite getCallSite(Symbol name) {
         Atom bindAtom = (Atom) COMPILER_BINDINGS.deref();
-        IPersistentMap bindings = (IPersistentMap) bindAtom.deref();
-        return (CallSite) RT.get(RT.get(bindings, name), CALLSITE);
+        return (CallSite) RT.get(RT.get(bindAtom.deref(), name), CALLSITE);
     }
 
     public static Object getGlobal(Symbol name) {
@@ -40,7 +39,7 @@ public class Global {
             MethodHandle handle = lambda.getHandle(args.length);
             Object ret;
             int arity = handle.type().parameterCount() - 1; // first parameter is ILambda
-            if (handle.isVarargsCollector() && args.length >= arity) {
+            if (handle.isVarargsCollector() && args.length >= arity - 1) {
                 Object[] newArgs = new Object[arity];
                 Object[] varArgs = new Object[args.length - arity + 1];
                 System.arraycopy(args, 0, newArgs, 0, arity - 1);
@@ -54,7 +53,7 @@ public class Global {
             while (ret instanceof Continuation)
                 ret = ((Continuation)ret).invoke();
             return ret;
-        } catch(Throwable t) { throw Util.sneakyThrow(t); }
+        } catch (Throwable t) { throw Util.sneakyThrow(t); }
     }
 
 }

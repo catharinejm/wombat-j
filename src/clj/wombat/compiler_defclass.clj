@@ -38,7 +38,12 @@
 (defmethod emit-jvm :invoke
   [env context ^GeneratorAdapter gen [_ fun & args :as form]]
   (assert-min-arity! form 1)
-  (emit-seq env :context/expression gen (core/cons fun args)))
+  (emit-seq env :context/expression gen (cons fun args)))
+
+(defmethod emit-jvm :apply
+  [env context ^GeneratorAdapter gen [_ fun args :as form]]
+  (assert-arity! form 2)
+  (emit-seq env :context/expression gen (list* fun args)))
 
 (defn add-label
   [{labels :labels} ^GeneratorAdapter gen lname]
@@ -239,6 +244,16 @@
   [env context ^GeneratorAdapter gen form]
   (assert-arity! form 0)
   (. gen dup))
+
+(defmethod emit-jvm 'dupX1
+  [env context ^GeneratorAdapter gen form]
+  (assert-arity! form 0)
+  (. gen dupX1))
+
+(defmethod emit-jvm 'dupX2
+  [env context ^GeneratorAdapter gen form]
+  (assert-arity! form 0)
+  (. gen dupX2))
 
 (defmethod emit-jvm 'swap
   [env context ^GeneratorAdapter gen form]

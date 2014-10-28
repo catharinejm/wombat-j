@@ -15,6 +15,9 @@
 (define (cons a d)
   (#:wombat.datatypes/cons a d))
 
+(define (length lis)
+  (#:wombat.datatypes/length lis))
+
 ;; This is NOT recursive!
 ;; (if (null? ...) ...) is a special case in the compiler!
 (define (null? o)
@@ -128,6 +131,25 @@
 (define-macro (let* binds . body)
   (foldr (lambda (l r) (list 'let (list l) r))
          (cons 'begin body) binds))
+
+(define-macro (and . vals)
+  (if (null? vals)
+    #t
+    (if (null? (cdr vals))
+      (car vals)
+      `(if ,(car vals)
+         (and ,@(cdr vals))
+         #f))))
+
+(define-macro (or . vals)
+  (if (null? vals)
+    #f
+    (if (null? (cdr vals))
+      (car vals)
+      `(let ((tmp ,(car vals)))
+         (if tmp
+           tmp
+           (or ,@(cdr vals)))))))
 
 (define (last lis)
   (if (null? lis)
@@ -314,6 +336,14 @@
          (#:str s2)
          (invokeVirtual String (String "concat" String))))
 
+(define (gensym . s)
+  (if (> (length s) 1)
+    (fail "gensym takes 0 or 1 arguments"))
+  (if (null? s)
+    (#:wombat.compiler/sanitize-name "G_")
+    (#:wombat.compiler/sanitize-name (#:str (car s)))))
+
+
 ;; (define define-record
 ;;   (lambda (rname fields)
 ;;     (#:wombat.compiler/set-global!
@@ -329,45 +359,39 @@
 ;;     '()))
 
 
-(define doit2)
-(define (doit n)
-  (if (> n 0)
-    (doit2 (sub1 n))
-    (print "Done!\n")))
-(define (doit2 n)
-  (doit n))
+;; (define doit2)
+;; (define (doit n)
+;;   (if (> n 0)
+;;     (doit2 (sub1 n))
+;;     (print "Done!\n")))
+;; (define (doit2 n)
+;;   (doit n))
 
 
-(define m4)
-(define m3)
-(define m2)
-(define (m1 n)
-  (if (> n 0)
-    (m2 (sub1 n))
-    (print "done!\n")))
-(define (m2 n)
-  (m3 n))
-(define (m3 n)
-  (m4 n))
-(define (m4 n)
-  (m1 n))
+;; (define m4)
+;; (define m3)
+;; (define m2)
+;; (define (m1 n)
+;;   (if (> n 0)
+;;     (m2 (sub1 n))
+;;     (print "done!\n")))
+;; (define (m2 n)
+;;   (m3 n))
+;; (define (m3 n)
+;;   (m4 n))
+;; (define (m4 n)
+;;   (m1 n))
 
-(define (time thunk)
-  (let ((start (#:jvm (invokeStatic System (long "nanoTime")) (box long)))
-        (ret (thunk))
-        (end (#:jvm (invokeStatic System (long "nanoTime")) (box long))))
-    (#:printf "time: %.3f ms\n" (#:- (#:/ (#:double end) 1000000) (#:/ (#:double start) 1000000)))
-    ret))
-
-(define (gensym . s)
-  (if (null? s)
-    (#:wombat.compiler/sanitize-name "G_")
-    (#:wombat.compiler/sanitize-name (str s))))
+(define-macro (time . body)
+  `(let ((start (#:jvm (invokeStatic System (long "nanoTime")) (box long)))
+         (ret (begin ,@body))
+         (end (#:jvm (invokeStatic System (long "nanoTime")) (box long))))
+     (#:printf "time: %.3f ms\n" (#:- (#:/ (#:double end) 1000000) (#:/ (#:double start) 1000000)))
+     ret))
 
 (define-macro (dotimes n . body)
-  (let ((gs (gensym "n")))
-    `(let loop ((,gs ,n))
-       (if (> ,gs 0)
-         (begin
-           ,@body
-           (loop (sub1 ,gs)))))))
+  `(let loop ((n ,n))
+     (if (> n 0)
+       (begin
+         ,@body
+         (loop (sub1 n))))))

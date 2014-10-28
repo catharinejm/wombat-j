@@ -112,12 +112,10 @@
 
 (defn expand1
   [form]
-  (if (and (list-like? form)
-           (not (contains? specials (first form)))
-           (contains? @global-bindings (first form))
-           (:macro (@global-bindings (first form))))
-    (let [^ILambda macro (get-in @global-bindings [(first form) :macro])]
-      (Global/invokeLambda macro (object-array (rest form))))
+  (if-let [^ILambda macro (and (list-like? form)
+                               (not (contains? specials (first form)))
+                               (get-in @global-bindings [(first form) :macro]))]
+    (Global/invokeLambda macro (object-array (rest form)))
     form))
 
 (defn expand
@@ -147,26 +145,27 @@
         lambda-env (extend-env env params)]
     (list* 'lambda (map (partial substitute lambda-env) params) (map (partial sanitize lambda-env) body))))
 
+(defn named-let
+  [[_ name bindings & body]]
+  (list 'letrec
+        (list (list name (list* 'lambda (map first bindings) body)))
+        (list* name (map second bindings))))
+
 (defn sanitize-let
   [env [_ bindings & body :as form]]
-  (let [[name bindings & body] (if (symbol? bindings)
-                                 (cons bindings body)
-                                 (list* nil bindings body))
-        sani-binds (map (partial sanitize env) (map second bindings))
+  (if (symbol? bindings)
+    (sanitize env (named-let form))
+    (let [sani-binds (map (partial sanitize env) (map second bindings))
                                         ; Scheme-style let does not extend env with new
                                         ; names until after bindings are evaluated
-        [let-env bind-syms] (loop [e env, sani-bs [], bs (map first bindings)]
-                              (if (seq bs)
-                                (let [sani (sanitize-name (first bs))]
-                                  (recur (assoc e (first bs) sani)
-                                         (conj sani-bs sani)
-                                         (rest bs)))
-                                [e sani-bs]))
-        let-env (if name
-                  (assoc let-env name (sanitize-name name))
-                  let-env)]
-    (debug "let-env: " let-env)
-    (list* 'let (map list bind-syms sani-binds) (map (partial sanitize let-env) body))))
+          [let-env bind-syms] (loop [e env, sani-bs [], bs (map first bindings)]
+                                (if (seq bs)
+                                  (let [sani (sanitize-name (first bs))]
+                                    (recur (assoc e (first bs) sani)
+                                           (conj sani-bs sani)
+                                           (rest bs)))
+                                  [e sani-bs]))]
+      (list* 'let (map list bind-syms sani-binds) (map (partial sanitize let-env) body)))))
 
 (defn sanitize-letrec
   [env [_ bindings & body :as form]]
@@ -707,30 +706,23 @@
 
 ;; (defmethod emit-seq 'define-class*
 ;;   [env context gen [_ fields :as defcls]])
-(defn named-let
-  [[_ name bindings & body]]
-  (list 'letrec
-        (list (list name (list* 'lambda (map first bindings) body)))
-        (list* name (map second bindings))))
 
 (defn emit-let
   [env context ^GeneratorAdapter gen [the-let bindings & body :as form]]
   (let [names (mapv #(vector (first %) (. gen newLocal object-type)) bindings)
-        vals (mapv second bindings)]
+        vals (mapv second bindings)
+        let-env (update-in env [:locals] merge (into {} names))]
     (dotimes [n (count names)]
       (let [[sym local-id] (nth names n)
             val-expr (nth vals n)]
         (binding [*lambda-name* (if (= the-let 'letrec) sym *lambda-name*)]
-          (emit env :context/expression gen val-expr))
+          (emit let-env :context/expression gen val-expr))
         (. gen storeLocal local-id)))
-    (let [let-env (update-in env [:locals] merge (into {} names))]
-      (emit-body let-env context gen body))))
+    (emit-body let-env context gen body)))
 
 (defmethod emit-seq 'let
   [env context ^GeneratorAdapter gen [_ bindings & body :as form]]
-  (if (symbol? bindings)
-    (emit env context gen (named-let form))
-    (emit-let env context gen form)))
+  (emit-let env context gen form))
 
 (defmethod emit-seq 'letrec
   [env context ^GeneratorAdapter gen letrec]

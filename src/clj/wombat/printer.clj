@@ -63,7 +63,7 @@
 
 (defmethod write-obj nil
   [_ ^Writer w]
-  (.write w "'()"))
+  (.write w "()"))
 
 (defmethod write-obj Character
   [^Character c ^Writer w]
