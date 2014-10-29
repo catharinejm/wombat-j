@@ -6,11 +6,12 @@
             [wombat.datatypes :refer :all])
   (:import [org.objectweb.asm ClassWriter ClassVisitor Opcodes Type Handle]
            [org.objectweb.asm.commons GeneratorAdapter Method]
-           [clojure.lang DynamicClassLoader Compiler RT LineNumberingPushbackReader Keyword Symbol]
+           [clojure.lang DynamicClassLoader Compiler RT LineNumberingPushbackReader
+            Keyword Symbol Numbers BigInt Ratio]
            [java.lang.invoke MethodType MethodHandle MethodHandles MethodHandles$Lookup
             CallSite VolatileCallSite]
            [java.io FileReader]
-           [java.util WeakHashMap]
+           [java.math BigInteger]
            [wombat ILambda AsmUtil Global])
   (:refer-clojure :exclude [compile load-file eval read cons list? vector? list* list]))
 (alias 'core 'clojure.core)
@@ -719,6 +720,28 @@
   (debug "emit-dup double" double)
   (. gen push (.doubleValue double))
   (. gen invokeStatic (asmtype Double) (Method/getMethod "Double valueOf(double)")))
+
+(defn emit-big-integer
+  [^GeneratorAdapter gen bi]
+  (. gen newInstance (asmtype BigInteger))
+  (. gen dup)
+  (. gen push (.toString bi))
+  (. gen invokeConstructor (asmtype BigInteger) (Method/getMethod "void <init>(String)")))
+
+(defmethod emit-dup BigInt
+  [^GeneratorAdapter gen ^BigInt bigint]
+  (debug "emit-dup BigInt" bigint)
+  (emit-big-integer gen bigint)
+  (. gen invokeStatic (asmtype BigInt) (Method/getMethod "clojure.lang.BigInt fromBigInteger(java.math.BigInteger)")))
+
+(defmethod emit-dup Ratio
+  [^GeneratorAdapter gen ^Ratio ratio]
+  (debug "emit-dup Ratio" ratio)
+  (. gen newInstance (asmtype Ratio))
+  (. gen dup)
+  (emit-big-integer gen (.numerator ratio))
+  (emit-big-integer gen (.denominator ratio))
+  (. gen invokeConstructor (asmtype Ratio) (Method/getMethod "void <init>(java.math.BigInteger,java.math.BigInteger)")))
 
 (defmethod emit-dup Character
   [^GeneratorAdapter gen ^Character char]

@@ -2,9 +2,10 @@
   (:require [clojure.java.io :as io]
             [wombat.datatypes :as wd :refer [javalist->list]])
   (:import [clojure.lang LineNumberingPushbackReader LispReader$ReaderException
-            PersistentList Symbol Keyword]
+            PersistentList Symbol Keyword BigInt Numbers]
            [java.io FileReader Reader]
            [java.util ArrayList]
+           [java.math BigInteger BigDecimal]
            [wombat.datatypes List Pair Vector])
   (:refer-clojure :exclude [read read-string]))
 
@@ -102,15 +103,20 @@
 
 (def int-re #"([-+]?)(?:(0)|([1-9][0-9]*))")
 (def float-re #"([-+]?[0-9]+(\.[0-9]*)?([eE][-+]?[0-9]+)?)")
+(def ratio-re #"([-+]?[0-9]+)/([0-9]+)")
 
 (defn match-number
   [numstr]
-  (cond
-   (re-matches int-re numstr)
-   (Long/parseLong numstr)
+  (condp re-matches numstr
+    int-re (let [bn (BigInteger. numstr 10)]
+             (if (< (.bitLength bn) 64)
+               (Numbers/num (.longValue bn))
+               (BigInt/fromBigInteger bn)))
     
-   (re-matches float-re numstr)
-   (Double/parseDouble numstr)))
+    float-re (Double/parseDouble numstr)
+
+    ratio-re :>> (fn [[_ numerator denominator]]
+                   (Numbers/divide (BigInteger. numerator) (BigInteger. denominator)))))
 
 (defn read-number
   [^LineNumberingPushbackReader rdr c]
@@ -348,7 +354,10 @@
   (let [c (.read rdr)]
     (when (= -1 c)
       (throw (RuntimeException. "EOF while reading number")))
-    (Long/parseLong (read-token rdr c) radix)))
+    (let [bn (BigInteger. (read-token rdr c) radix)]
+      (if (< (.bitLength bn) 64)
+        (Numbers/num (.longValue bn))
+        (BigInt/fromBigInteger bn)))))
 
 (defmethod read-dispatch-form :decimal
   [^LineNumberingPushbackReader rdr c]

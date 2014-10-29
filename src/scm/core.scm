@@ -50,19 +50,19 @@
 (define (concat . ls)
   (foldr cat* '() ls))
 
-(define (eqv? a b)
-  (if (null? a)
-    (null? b)
-    (#:jvm (#:emit a)
-           (#:emit b)
-           (invokeVirtual Object (boolean "equals" Object))
-           (box boolean))))
-
 ;; like null?, this relies on a special case in the compiler
 (define (eq? a b)
   (if (eq? a b)
     #t
     #f))
+
+(define (eqv? a b)
+  (if (eq? a b)
+    #t
+    (#:jvm (#:emit a)
+           (#:emit b)
+           (invokeVirtual Object (boolean "equals" Object))
+           (box boolean))))
 
 (define (list? x)
   (#:wombat.datatypes/list? x))
@@ -152,7 +152,7 @@
          (and ,@(cdr vals))
          #f))))
 
-(define-macro (and' . vals)
+(define-macro (and* . vals)
   (if (null? vals)
     #t
     (if (null? (cdr vals))
@@ -162,7 +162,7 @@
       `(let ((temp ,(car vals)))
          (and (not (null? tmp))
               tmp
-              (and' ,@(cdr vals)))))))
+              (and* ,@(cdr vals)))))))
 
 (define-macro (or . vals)
   (if (null? vals)
@@ -174,7 +174,7 @@
            tmp
            (or ,@(cdr vals)))))))
 
-(define-macro (or' . vals)
+(define-macro (or* . vals)
   (if (null? vals)
     #f
     (if (null? (cdr vals))
@@ -184,10 +184,10 @@
       `(let ((tmp ,(car vals)))
          (or (and (not (null? tmp))
                   tmp)
-             (or' ,@(cdr vals)))))))
+             (or* ,@(cdr vals)))))))
 
-(define-macro (if' cond then . else)
-  `(if (and' ,cond)
+(define-macro (if* cond then . else)
+  `(if (and* ,cond)
      ,then
      ,@else))
 
@@ -199,8 +199,8 @@
      ,@else
      ,then))
 
-(define-macro (unless' cond . rest)
-  `(unless (and' ,cond) ,@rest))
+(define-macro (unless* cond . rest)
+  `(unless (and* ,cond) ,@rest))
 
 (define-macro (if-not cond then . else)
   (if (and (not (null? else))
@@ -210,23 +210,23 @@
      ,@else
      ,then))
 
-(define-macro (if-not' cond . rest)
-  `(if-not (and' ,cond) ,@rest))
+(define-macro (if-not* cond . rest)
+  `(if-not (and* ,cond) ,@rest))
 
 (define-macro (when cond . exprs)
   `(if ,cond
      (begin ,@exprs)))
 
-(define-macro (when' cond . exprs)
-  `(if' ,cond
+(define-macro (when* cond . exprs)
+  `(if* ,cond
      (begin ,@exprs)))
 
 (define-macro (when-not cond . exprs)
   `(if-not ,cond
      (begin ,@exprs)))
 
-(define-macro (when-not' cond . exprs)
-  `(if-not' cond ,@exprs))
+(define-macro (when-not* cond . exprs)
+  `(if-not* cond ,@exprs))
 
 (define-macro (cond . conds)
   (if (null? conds)
@@ -237,17 +237,17 @@
          (begin ,@(cdar conds))
          (cond ,@(cdr conds))))))
 
-(define-macro (cond' . conds)
+(define-macro (cond* . conds)
   (if (null? conds)
     '()
     (if (eq? (caar conds) 'else)
       `(begin ,@(cdar conds))
-      `(if' ,(caar conds)
+      `(if* ,(caar conds)
          (begin ,@(cdar conds))
-         (cond' ,@(cdr conds))))))
+         (cond* ,@(cdr conds))))))
 
-(define (not' o)
-  (if-not' o
+(define (not* o)
+  (if-not* o
     #t
     #f))
 
@@ -317,96 +317,68 @@
 
 (define (add1 n)
   (#:jvm (#:emit n)
-         (checkCast Number)
-         (invokeVirtual Number (long "longValue"))
-         (push long 1)
-         (add long)
-         (box long)))
+         (invokeStatic clojure.lang.Numbers (Number "incP" Object))))
 
 (define (sub1 n)
   (#:jvm (#:emit n)
-         (checkCast Number)
-         (invokeVirtual Number (long "longValue"))
-         (push long 1)
-         (sub long)
-         (box long)))
+         (invokeStatic clojure.lang.Numbers (Number "decP" Object))))
 
 (define (+ x y)
   (#:jvm (#:emit x)
-         (checkCast Number)
-         (invokeVirtual Number (long "longValue"))
          (#:emit y)
-         (checkCast Number)
-         (invokeVirtual Number (long "longValue"))
-         (add long)
-         (box long)))
+         (invokeStatic clojure.lang.Numbers (Number "addP" Object Object))))
 
 (define (- x y)
   (#:jvm (#:emit x)
-         (checkCast Number)
-         (invokeVirtual Number (long "longValue"))
          (#:emit y)
-         (checkCast Number)
-         (invokeVirtual Number (long "longValue"))
-         (sub long)
-         (box long)))
+         (invokeStatic clojure.lang.Numbers (Number "subP" Object Object))))
 
 (define (* x y)
   (#:jvm (#:emit x)
-         (checkCast Number)
-         (invokeVirtual Number (long "longValue"))
          (#:emit y)
-         (checkCast Number)
-         (invokeVirtual Number (long "longValue"))
-         (mul long)
-         (box long)))
+         (invokeStatic clojure.lang.Numbers (Number "multiplyP" Object Object))))
+
+(define (/ x y)
+    (#:jvm (#:emit x)
+         (#:emit y)
+         (invokeStatic clojure.lang.Numbers (Number "divide" Object Object))))
 
 (define (< x y)
   (#:jvm (#:emit x)
-         (checkCast Number)
-         (invokeVirtual Number (long "longValue"))
          (#:emit y)
-         (checkCast Number)
-         (invokeVirtual Number (long "longValue"))
-         (ifCmp long < #:is-less)
-         (#:emit #f)
-         (goto #:end)
-         (label #:is-less)
-         (#:emit #t)
-         (label #:end)))
+         (invokeStatic clojure.lang.Numbers (boolean "lt" Object Object))
+         (box boolean)))
+
+(define (<= x y)
+  (#:jvm (#:emit x)
+         (#:emit y)
+         (invokeStatic clojure.lang.Numbers (boolean "lte" Object Object))
+         (box boolean)))
 
 (define (> x y)
   (#:jvm (#:emit x)
-         (checkCast Number)
-         (invokeVirtual Number (long "longValue"))
          (#:emit y)
-         (checkCast Number)
-         (invokeVirtual Number (long "longValue"))
-         (ifCmp long > #:is-more)
-         (#:emit #f)
-         (goto #:end)
-         (label #:is-more)
-         (#:emit #t)
-         (label #:end)))
+         (invokeStatic clojure.lang.Numbers (boolean "gt" Object Object))
+         (box boolean)))
+
+(define (>= x y)
+  (#:jvm (#:emit x)
+         (#:emit y)
+         (invokeStatic clojure.lang.Numbers (boolean "gte" Object Object))
+         (box boolean)))
 
 (define (= x y)
   (#:jvm (#:emit x)
-         (checkCast Number)
-         (invokeVirtual Number (long "longValue"))
          (#:emit y)
-         (checkCast Number)
-         (invokeVirtual Number (long "longValue"))
-         (ifCmp long = #:are-equal)
-         (#:emit #f)
-         (goto #:end)
-         (label #:are-equal)
-         (#:emit #t)
-         (label #:end)))
+         (invokeStatic clojure.lang.Numbers (boolean "equiv" Object Object))
+         (box boolean)))
 
 (define (fac n)
-  (if (< n 2)
-    1
-    (* (fac (sub1 n)) n)))
+  (let loop ((n n)
+             (p 1))
+    (if (> n 0)
+      (loop (sub1 n) (* p n))
+      p)))
 
 (define (sum-to n)
   (if (> n 0)
