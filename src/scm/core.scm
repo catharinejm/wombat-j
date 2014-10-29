@@ -58,6 +58,12 @@
            (invokeVirtual Object (boolean "equals" Object))
            (box boolean))))
 
+;; like null?, this relies on a special case in the compiler
+(define (eq? a b)
+  (if (eq? a b)
+    #t
+    #f))
+
 (define (list? x)
   (#:wombat.datatypes/list? x))
 
@@ -88,9 +94,7 @@
   (#:jvm (#:emit f)
          (checkCast wombat.ILambda)
          (#:emit args)
-         (invokeInterface wombat.ILambda (Object "applyTo" Object))
-         ;; 'handle-continuation' will no-op if compiler has *return-continuations* set
-         (#:handle-continuation)))
+         (invokeInterface wombat.ILambda (Object "applyTo" Object))))
 
 (define (quasiquote-pair* c l ls)
   (if (null? c)
@@ -122,12 +126,18 @@
 (define-macro (fail msg)
   `(#:jvm (throwException RuntimeException ,msg)))
 
-(define-macro (cond . conds)
-  (let ((c (lambda (c rest)
-             (list 'if (car c)
-                   (car (cdr c))
-                   rest))))
-    (foldr c '() conds)))
+(define-macro (caar l) `(car (car ,l)))
+(define-macro (cadr l) `(car (cdr ,l)))
+(define-macro (cdar l) `(cdr (car ,l)))
+(define-macro (cddr l) `(cdr (cdr ,l)))
+(define-macro (caaar l) `(car (caar ,l)))
+(define-macro (caadr l) `(car (cadr ,l)))
+(define-macro (cadar l) `(car (cdar ,l)))
+(define-macro (caddr l) `(car (cddr ,l)))
+(define-macro (cdaar l) `(cdr (caar ,l)))
+(define-macro (cdadr l) `(cdr (cadr ,l)))
+(define-macro (cddar l) `(cdr (cdar ,l)))
+(define-macro (cdddr l) `(cdr (cddr ,l)))
 
 (define-macro (let* binds . body)
   (foldr (lambda (l r) (list 'let (list l) r))
@@ -142,6 +152,18 @@
          (and ,@(cdr vals))
          #f))))
 
+(define-macro (and' . vals)
+  (if (null? vals)
+    #t
+    (if (null? (cdr vals))
+      `(let ((tmp ,(car vals)))
+         (and (not (null? tmp))
+              tmp))
+      `(let ((temp ,(car vals)))
+         (and (not (null? tmp))
+              tmp
+              (and' ,@(cdr vals)))))))
+
 (define-macro (or . vals)
   (if (null? vals)
     #f
@@ -151,6 +173,85 @@
          (if tmp
            tmp
            (or ,@(cdr vals)))))))
+
+(define-macro (or' . vals)
+  (if (null? vals)
+    #f
+    (if (null? (cdr vals))
+      `(let ((tmp ,(car vals)))
+         (and (not (null? tmp))
+              tmp))
+      `(let ((tmp ,(car vals)))
+         (or (and (not (null? tmp))
+                  tmp)
+             (or' ,@(cdr vals)))))))
+
+(define-macro (if' cond then . else)
+  `(if (and' ,cond)
+     ,then
+     ,@else))
+
+(define-macro (unless cond then . else)
+  (if (and (not (null? else))
+           (not (null? (cdr else))))
+    (fail "`unless' takes 2 or 3 forms"))
+  `(if ,cond
+     ,@else
+     ,then))
+
+(define-macro (unless' cond . rest)
+  `(unless (and' ,cond) ,@rest))
+
+(define-macro (if-not cond then . else)
+  (if (and (not (null? else))
+           (not (null? (cdr else))))
+    (fail "`if-not' takes 2 or 3 forms"))
+  `(if ,cond
+     ,@else
+     ,then))
+
+(define-macro (if-not' cond . rest)
+  `(if-not (and' ,cond) ,@rest))
+
+(define-macro (when cond . exprs)
+  `(if ,cond
+     (begin ,@exprs)))
+
+(define-macro (when' cond . exprs)
+  `(if' ,cond
+     (begin ,@exprs)))
+
+(define-macro (when-not cond . exprs)
+  `(if-not ,cond
+     (begin ,@exprs)))
+
+(define-macro (when-not' cond . exprs)
+  `(if-not' cond ,@exprs))
+
+(define-macro (cond . conds)
+  (if (null? conds)
+    '()
+    (if (eq? (caar conds) 'else)
+      `(begin ,@(cdar conds))
+      `(if ,(caar conds)
+         (begin ,@(cdar conds))
+         (cond ,@(cdr conds))))))
+
+(define-macro (cond' . conds)
+  (if (null? conds)
+    '()
+    (if (eq? (caar conds) 'else)
+      `(begin ,@(cdar conds))
+      `(if' ,(caar conds)
+         (begin ,@(cdar conds))
+         (cond' ,@(cdr conds))))))
+
+;; (define (expand-all form)
+;;   (let loop ((cur form)
+;;              (res '()))
+;;     (if (and (list? form)
+;;              (let ex ((f form))
+;;                (if (eqv? )))))))
 
 (define (last lis)
   (if (null? lis)

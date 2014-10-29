@@ -149,12 +149,6 @@
   (assert-arity! form 0)
   (emit-explode-continuation gen))
 
-(defmethod emit-jvm :handle-continuation
-  [env context gen form]
-  (assert-arity! form 0)
-  (when-not *return-continuations*
-    (emit-explode-continuation gen)))
-
 (defmethod emit-jvm 'newInstance
   [env context ^GeneratorAdapter gen [_ type :as form]]
   (assert-arity! form 1)

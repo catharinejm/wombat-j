@@ -53,7 +53,7 @@
 (def rest-token (symbol "#!rest"))
 (defn special-token?
   [sym]
-  (.startsWith (name sym) "#!"))
+  (.startsWith (str sym) "#!"))
 
 (def specials
   #{'lambda
@@ -115,7 +115,10 @@
   (if-let [^ILambda macro (and (list-like? form)
                                (not (contains? specials (first form)))
                                (get-in @global-bindings [(first form) :macro]))]
-    (Global/invokeLambda macro (object-array (rest form)))
+    (loop [expanded (.applyTo macro (cdr (seq->list form)))]
+      (if (instance? wombat.Continuation expanded)
+        (recur (.invoke ^wombat.Continuation expanded))
+        expanded))
     form))
 
 (defn expand
@@ -893,6 +896,29 @@
          (throw (IllegalArgumentException. "`null?' takes exactly one argument")))
        (emit env :context/expression gen (second (second condition)))
        (. gen ifNull false-label))
+
+                                        ; optimize common case (if (eq? ...) ...)
+     (and (list-like? condition) (= (first condition) 'eq?))
+     (do
+       (when (not= (count condition) 3)
+         (throw (IllegalArgumentException. "`eq?' takes exactly 2 arguments")))
+       (let [[_ a b] condition]
+         (emit env :context/expression gen a)
+         (emit env :context/expression gen b)
+         (. gen ifCmp object-type GeneratorAdapter/NE false-label)))
+
+                                        ; optimize common case (if (not (eq? ...)) ...)
+     (and (list-like? condition) (= (first condition) 'not)
+          (list-like? (second condition)) (= (fnext condition) 'eq?))
+     (do
+       (when (not= (count condition) 2)
+         (throw (IllegalArgumentException. "`not' takes exactly one argument")))
+       (when (not= (count (second condition)) 3)
+         (throw (IllegalArgumentException. "`eq?' takes exactly two arguments")))
+       (let [[_ a b] (second condition)]
+         (emit env :context/expression gen a)
+         (emit env :context/expression gen b)
+         (. gen ifCmp object-type GeneratorAdapter/EQ false-label)))
 
                                         ; optimize common case (if (not ...) ...)
      (and (list-like? condition) (= (first condition) 'not))
