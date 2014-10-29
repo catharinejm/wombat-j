@@ -630,7 +630,7 @@
 (defn emit-global
   [^GeneratorAdapter gen sym]
   (when (:macro (@global-bindings sym))
-    (throw (RuntimeException. "Can't take the value of a macro: " sym)))
+    (throw (RuntimeException. (str "Can't take the value of a macro: " sym))))
   (. gen invokeDynamic "getGlobal"
      (.toMethodDescriptorString (MethodType/methodType Object (make-array Class 0)))
      global-bootstrap
@@ -844,7 +844,8 @@
 (defn macro-handle
   [sym]
   (. (MethodHandles/throwException Object RuntimeException)
-     (bindTo (RuntimeException. (str "Can't take the value of a macro: " sym)))))
+     (bindTo (RuntimeException. (str "Can't take the value of a macro: " sym
+                                     " - You have overridden an existing global value.")))))
 
 (defn set-macro!
   [sym value]
@@ -882,7 +883,7 @@
      (and (list-like? condition) (= (first condition) 'null?))
      (do
        (when (not= (count condition) 2)
-         (throw (IllegalArgumentException. "`null?' takes exactly one argument")))
+         (throw (IllegalArgumentException. "null? takes exactly one argument")))
        (emit env :context/expression gen (second condition))
        (. gen ifNonNull false-label))
 
@@ -891,9 +892,9 @@
           (list-like? (second condition)) (= (first (second condition)) 'null?))
      (do
        (when (not= (count condition) 2)
-         (throw (IllegalArgumentException. "`not' takes exactly one argument")))
+         (throw (IllegalArgumentException. "not takes exactly one argument")))
        (when (not= (count (second condition)) 2)
-         (throw (IllegalArgumentException. "`null?' takes exactly one argument")))
+         (throw (IllegalArgumentException. "null? takes exactly one argument")))
        (emit env :context/expression gen (second (second condition)))
        (. gen ifNull false-label))
 
@@ -901,7 +902,7 @@
      (and (list-like? condition) (= (first condition) 'eq?))
      (do
        (when (not= (count condition) 3)
-         (throw (IllegalArgumentException. "`eq?' takes exactly 2 arguments")))
+         (throw (IllegalArgumentException. "eq? takes exactly 2 arguments")))
        (let [[_ a b] condition]
          (emit env :context/expression gen a)
          (emit env :context/expression gen b)
@@ -912,9 +913,9 @@
           (list-like? (second condition)) (= (fnext condition) 'eq?))
      (do
        (when (not= (count condition) 2)
-         (throw (IllegalArgumentException. "`not' takes exactly one argument")))
+         (throw (IllegalArgumentException. "not takes exactly one argument")))
        (when (not= (count (second condition)) 3)
-         (throw (IllegalArgumentException. "`eq?' takes exactly two arguments")))
+         (throw (IllegalArgumentException. "eq? takes exactly two arguments")))
        (let [[_ a b] (second condition)]
          (emit env :context/expression gen a)
          (emit env :context/expression gen b)
@@ -924,7 +925,7 @@
      (and (list-like? condition) (= (first condition) 'not))
      (do
        (when (not= (count condition) 2)
-         (throw (IllegalArgumentException. "`not' takes exactly one argument")))
+         (throw (IllegalArgumentException. "not takes exactly one argument")))
        (emit env :context/expression gen (second condition))
        (. gen getStatic boolean-object-type "FALSE" boolean-object-type)
        (. gen ifCmp boolean-object-type GeneratorAdapter/NE false-label))
@@ -1099,7 +1100,7 @@
 (defmethod emit-seq -invoke-
   [env context ^GeneratorAdapter gen [fun & args :as call]]
   (when (nil? fun)
-    (throw (IllegalArgumentException. "Can't invoke nil")))
+    (throw (IllegalArgumentException. "Can't invoke '()")))
   (debug "emitting invoke:" call)
   (debug "context:" context)
 

@@ -194,7 +194,7 @@
 (define-macro (unless cond then . else)
   (if (and (not (null? else))
            (not (null? (cdr else))))
-    (fail "`unless' takes 2 or 3 forms"))
+    (fail "unless takes 2 or 3 forms"))
   `(if ,cond
      ,@else
      ,then))
@@ -205,7 +205,7 @@
 (define-macro (if-not cond then . else)
   (if (and (not (null? else))
            (not (null? (cdr else))))
-    (fail "`if-not' takes 2 or 3 forms"))
+    (fail "if-not takes 2 or 3 forms"))
   `(if ,cond
      ,@else
      ,then))
@@ -246,12 +246,10 @@
          (begin ,@(cdar conds))
          (cond' ,@(cdr conds))))))
 
-;; (define (expand-all form)
-;;   (let loop ((cur form)
-;;              (res '()))
-;;     (if (and (list? form)
-;;              (let ex ((f form))
-;;                (if (eqv? )))))))
+(define (not' o)
+  (if-not' o
+    #t
+    #f))
 
 (define (last lis)
   (if (null? lis)
