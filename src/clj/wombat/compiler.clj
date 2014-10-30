@@ -5,7 +5,7 @@
             [wombat.printer :refer :all]
             [wombat.datatypes :refer :all])
   (:import [org.objectweb.asm ClassWriter ClassVisitor Opcodes Type Handle]
-           [org.objectweb.asm.commons GeneratorAdapter Method]
+           [org.objectweb.asm.commons GeneratorAdapter Method TableSwitchGenerator]
            [clojure.lang DynamicClassLoader Compiler RT LineNumberingPushbackReader
             Keyword Symbol Numbers BigInt Ratio]
            [java.lang.invoke MethodType MethodHandle MethodHandles MethodHandles$Lookup
@@ -151,7 +151,7 @@
 
 (defn validate-rest-token!
   [params]
-  (when-let [rest (seq (drop-while (complement special-token?) variadic))]
+  (when-let [rest (seq (drop-while (complement special-token?) params))]
     (when (not= (count rest) 2)
       (throw (IllegalArgumentException. "invalid placement of #!rest token")))))
 
@@ -192,8 +192,9 @@
 
 (defn sanitize-case-lambda
   [env [_ methods :as form]]
-  (for [[params & body] (validate-arities methods)]
-    ))
+  (cons 'case-lambda
+        (for [[params & body] (validate-arities methods)]
+          (sanitize-method env params body))))
 
 (defn named-let
   [[_ name bindings & body]]
@@ -292,6 +293,12 @@
 
      (['lambda params & body] :seq)
      (apply disj (free-vars body) (cons *lambda-name* (remove special-token? params)))
+
+     (['case-lambda & methods] :seq)
+     (reduce into (sorted-set)
+             (map #(apply disj (free-vars (second %))
+                          (cons *lambda-name* (remove special-token? (first %))))
+                  methods))
 
      ([(:or 'let 'letrec) bindings & body] :seq)
      (let [[name bindings & body] (if (symbol? bindings)
@@ -423,7 +430,7 @@
     (. gen endMethod)))
 
 (defn emit-arity-exception
-  [^GeneratorAdapter gen proper-arity restarg given-arity-fn]
+  [^GeneratorAdapter gen ^Type thistype given-arity-fn]
   (. gen newInstance (asmtype IllegalArgumentException))
   (. gen dup)
   (. gen newInstance (asmtype StringBuilder))
@@ -433,7 +440,7 @@
   (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "StringBuilder append(String)"))
   (given-arity-fn)
   (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "StringBuilder append(int)"))
-  (. gen push (str " for " proper-arity (when restarg "+") ")"))
+  (. gen push (str ") passed to: " (.getClassName thistype)))
   (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "StringBuilder append(String)"))
   (. gen invokeVirtual (asmtype StringBuilder) (Method/getMethod "String toString()"))
   (. gen invokeConstructor (asmtype IllegalArgumentException) (Method/getMethod "void <init>(String)"))
@@ -463,17 +470,18 @@
   (. gen pop))
 
 (defn gen-applier
-  [^ClassWriter cw {:keys [params restarg ^Type thistype] :as env}]
+  [^ClassWriter cw ^Type thistype arglists]
   (let [gen (GeneratorAdapter. Opcodes/ACC_PUBLIC (Method/getMethod "Object applyTo(Object)") nil nil cw)
         bad-arity (. gen newLabel)
         invoke-label (. gen newLabel)
-        loop-start (. gen newLabel)
         list-local (. gen newLocal (asmtype wombat.datatypes.List))
-        positional-args (repeat (count params) object-type)
-        sig (into-array Type (if restarg
-                               (conj (vec positional-args) (asmtype object-array-class))
-                               positional-args))
-        method (Method. "invoke" object-type sig)
+        fixed-arities (sort (map count (remove #((set %) rest-token) arglists)))
+        variadic (if-let [varg (some #(and ((set %) rest-token) %) arglists)]
+                   (dec (count varg)))
+        min-varg-arity (when variadic
+                         (if (= (last fixed-arities) (dec variadic))
+                           variadic
+                           (dec variadic)))
         emit-list-cnt (fn []
                         (let [is-null (. gen newLabel)
                               end (. gen newLabel)]
@@ -485,39 +493,54 @@
                           (. gen mark is-null)
                           (. gen pop)
                           (AsmUtil/pushInt gen 0)
-                          (. gen mark end)))]
+                          (. gen mark end)))
+        unroll-list (fn [n]
+                      (dotimes [_ n]
+                        (. gen dup)
+                        (. gen getField (asmtype wombat.datatypes.List) "head" object-type)
+                        (. gen swap)
+                        (. gen getField (asmtype wombat.datatypes.List) "tail" object-type)
+                        (. gen checkCast (asmtype wombat.datatypes.List))))]
     (. gen visitCode)
-    
+
     (. gen loadArg 0)
     (. gen checkCast (asmtype wombat.datatypes.List))
     (. gen storeLocal list-local)
     
-    (emit-list-cnt)
-    (AsmUtil/pushInt gen (count params))
-    (if restarg
-      (. gen ifCmp Type/INT_TYPE GeneratorAdapter/LT bad-arity)
-      (. gen ifCmp Type/INT_TYPE GeneratorAdapter/NE bad-arity))
-
-    (. gen loadThis)
-    (. gen loadLocal list-local)
-    (dotimes [_ (count params)]
-      (. gen dup)
-      (. gen getField (asmtype wombat.datatypes.List) "head" object-type)
-      (. gen swap)
-      (. gen getField (asmtype wombat.datatypes.List) "tail" object-type)
-      (. gen checkCast (asmtype wombat.datatypes.List)))
-
-    (if restarg
-      (. gen invokeStatic (asmtype RT) (Method/getMethod "Object[] seqToArray(clojure.lang.ISeq)"))
-      (. gen pop))
-
-    (. gen goTo invoke-label)
-
-    (. gen mark bad-arity)
-    (emit-arity-exception gen (count params) restarg emit-list-cnt)
-    (. gen mark invoke-label)
-
-    (. gen invokeVirtual thistype method)
+    (let [switch-label (. gen newLabel)
+          end-switch-label (. gen newLabel)
+          switch-generator (reify TableSwitchGenerator
+                             (generateCase [this key end]
+                               (let [method (Method. "invoke" object-type (into-array Type (repeat key object-type)))]
+                                 (. gen loadThis)
+                                 (. gen loadLocal list-local)
+                                 (unroll-list key)
+                                 (. gen storeLocal list-local) ; should be null
+                                 (. gen invokeVirtual thistype method)
+                                 (. gen goTo end)))
+                             (generateDefault [this]
+                               (emit-arity-exception gen thistype emit-list-cnt)))]
+      (emit-list-cnt)
+      (if variadic
+        (. gen dup)
+        (AsmUtil/pushInt gen min-varg-arity)
+        (. gen ifCmp Type/INT_TYPE GeneratorAdapter/LT switch-label)
+        (. gen pop) ; pop list count
+        (. gen loadThis)
+        (. gen loadLocal list-local)
+        (unroll-list (dec variadic))
+        (. gen invokeStatic (asmtype RT) (Method/getMethod "Object[] seqToArray(clojure.lang.ISeq)"))
+        (. gen visitInsn Opcodes/ACONST_NULL)
+        (. gen storeLocal list-local)
+        (. gen invokeVirtual thistype (Method. "invoke" object-type (into-array Type (concat (repeat (dec variadic) object-type)
+                                                                                             (list object-array-type)))))
+        (. gen goTo end-switch-label))
+      
+      (. gen mark switch-label)
+      ;; list count is on stack
+      (. gen switchTable (int-array fixed-arities) end-switch-label)
+      (. gen mark end-switch-label))
+    
     (. gen returnValue)
     (. gen endMethod)))
 
@@ -604,12 +627,6 @@
       (. gen returnValue)
       (. gen endMethod))))
 
-(defn validate-params!
-  [params]
-  (when (and (some #{rest-token} params)
-             (not= (count (drop-while (complement #{rest-token}) params)) 2))
-    (throw (IllegalArgumentException. "#!rest may only be followed by one symbol!"))))
-
 (def ^:dynamic *compiled-lambdas*)
 
 (defmulti compile
@@ -623,26 +640,47 @@
 
   first)
 
+(defn gen-methods
+  [^ClassWriter cw {:keys [thistype] :as env} methods]
+  (let [before-rest (complement #{rest-token})
+        arglists (map first methods)]
+    (doseq [[params & body] methods]
+      (let [env (assoc env
+                  :params (take-while before-rest params)
+                  :restarg (second (drop-while before-rest params)))]
+        (gen-body cw env body)))
+    (gen-applier cw thistype arglists)
+    (gen-handle cw thistype arglists)))
+
+(defn compile-lambda
+  [[_ & methods :as form]]
+  (let [fv (vec (free-vars form))
+        cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
+        lname (str (dotmunge (str (or *top-level* *lambda-name* 'lambda))) "_" (next-id))
+        fqname (str "wombat/" lname)
+        _ (debug "fqname:" fqname)
+        dotname (.replace fqname "/" ".")
+        ifaces (into-array String ["wombat/ILambda"])
+        env {:closed-overs fv
+             :locals {}
+             :recur-sym *lambda-name*
+             :thistype (Type/getObjectType fqname)}]
+    (. cw visit Opcodes/V1_7 Opcodes/ACC_PUBLIC fqname nil "java/lang/Object" ifaces)
+    (gen-closure-fields cw fv)
+    (gen-ctor cw fqname fv)
+    (binding [*lambda-name* (if *top-level* *lambda-name* nil)]
+      (gen-methods cw env methods))
+    (. cw visitEnd)))
+
 (defmethod compile 'lambda
   [[_ params & body :as lambda]]
   (when-not (get @*compiled-lambdas* lambda)
     (validate-params! params)
     (debug "Compiling:" lambda)
-    (let [fv (vec (free-vars lambda))
-          cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
-          lname (str (dotmunge (str (or *lambda-name* 'lambda))) "_" (next-id))
-          fqname (str "wombat/" lname)
-          _ (debug "fqname:" fqname)
-          dotname (.replace fqname "/" ".")
-          ifaces (into-array String ["wombat/ILambda"])
+    (let [
           before-rest (complement #{rest-token})
           restarg (second (drop-while before-rest params))
-          env {:params (take-while before-rest params)
-               :closed-overs fv
-               :locals {}
-               :recur-sym *lambda-name* ;; TODO: Enable named lambdas
-               :thistype (Type/getObjectType fqname)
-               :restarg restarg}]
+]
       (binding [*lambda-name* (if *top-level* *lambda-name* nil)]
         (. cw visit Opcodes/V1_7 Opcodes/ACC_PUBLIC fqname nil "java/lang/Object" ifaces)
         (gen-closure-fields cw fv)
@@ -653,6 +691,16 @@
         (. cw visitEnd))
       (swap! *compiled-lambdas* conj lambda)
       [dotname (.toByteArray cw) fv])))
+
+(defmethod compile 'case-lambda
+  [[_ & methods :as case-lambda]]
+  (debug "Compiling:" case-lambda)
+  (let [fv (vec (free-vars case-lambda))
+        cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
+        lname (str (dotmunge (str (or *lambda-name* 'lambda))) "_" (next-id))
+        fqname (str "wombat/" lname)
+        dotname (.replace fqname "/" ".")
+        ifaces (into-array String ["wombat/ILambda"])]))
 
 (defn emit
   [env context gen form]
@@ -853,7 +901,7 @@
 (defmethod emit-seq 'lambda
   [env context ^GeneratorAdapter gen [_ params & body :as lambda]]
   (when-not (= context :context/statement)
-    (let [[dotname bytecode closed-overs] (binding [*top-level* false]
+    (let [[dotname bytecode closed-overs] (binding [*top-level* nil]
                                             (compile lambda))]
       (. *class-loader* defineClass dotname bytecode lambda)
       (let [slashname (.replace dotname "." "/")]
@@ -1183,7 +1231,7 @@
 (defn compile-and-load
   ^Class [form]
   (debug "COMPILE-AND-LOAD: " form)
-  (binding [*top-level* true]
+  (binding [*top-level* 'eval]
     (let [[name bytecode] (compile form)]
       (.defineClass *class-loader* name bytecode form)
       (Class/forName name true *class-loader*))))
