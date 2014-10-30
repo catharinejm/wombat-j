@@ -188,7 +188,7 @@
   [env [_ params & body :as form]]
   (let [params (expand-params params)]
     (validate-params! params)
-    (cons 'lambda (sanitize-method params body))))
+    (cons 'lambda (sanitize-method env params body))))
 
 (defn sanitize-case-lambda
   [env [_ methods :as form]]
@@ -480,7 +480,7 @@
 
 (defn min-variadic-arity
   [fixed variadic]
-  (when variradic
+  (when variadic
     (if (= (last fixed) (dec variadic))
       variadic
       (dec variadic))))
@@ -543,12 +543,12 @@
         (. gen visitInsn Opcodes/ACONST_NULL)
         (. gen storeLocal list-local)
         (. gen invokeVirtual thistype (Method. "invoke" object-type (into-array Type (concat (repeat (dec variadic) object-type)
-                                                                                             (list object-array-type)))))
+                                                                                             (list (asmtype object-array-class))))))
         (. gen goTo end-switch-label))
       
       (. gen mark switch-label)
       ;; list count is on stack
-      (. gen switchTable (int-array fixed-arities) end-switch-label)
+      (. gen tableSwitch (int-array fixed-arities) switch-generator)
       (. gen mark end-switch-label))
     
     (. gen returnValue)
@@ -611,13 +611,14 @@
                          (. clinitgen invokeVirtual (asmtype MethodType)
                             (Method/getMethod "java.lang.invoke.MethodType insertParameterTypes(int,Class[])"))
 
+                         (. clinitgen invokeVirtual (asmtype MethodHandle)
+                            (Method/getMethod "java.lang.invoke.MethodHandle asType(java.lang.invoke.MethodType)"))
+
                          (when variadic?
                            (. clinitgen push (asmtype object-array-class))
                            (. clinitgen invokeVirtual (asmtype MethodHandle)
                               (Method/getMethod "java.lang.invoke.MethodHandle asVarargsCollector(Class)")))
 
-                         (. clinitgen invokeVirtual (asmtype MethodHandle)
-                            (Method/getMethod "java.lang.invoke.MethodHandle asType(java.lang.invoke.MethodType)"))
                          (. clinitgen putStatic thistype (handle-name arity) (asmtype MethodHandle)))]
       (. clinitgen visitCode)
 
@@ -657,7 +658,7 @@
         
         (. gen mark switch-label)
         ;; arity arg is on stack
-        (. gen switchTable (int-array fixed) end-switch-label)
+        (. gen tableSwitch (int-array fixed) switch-generator)
         (. gen mark end-switch-label))
     
       (. gen returnValue)
@@ -689,9 +690,8 @@
     (gen-handle cw thistype arglists)))
 
 (defn compile-lambda
-  [[_ & methods :as form]]
-  (let [fv (vec (free-vars form))
-        cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
+  [fv methods]
+  (let [cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
         lname (str (dotmunge (str (or *top-level* *lambda-name* 'lambda))) "_" (next-id))
         fqname (str "wombat/" lname)
         _ (debug "fqname:" fqname)
@@ -706,37 +706,20 @@
     (gen-ctor cw fqname fv)
     (binding [*lambda-name* (if *top-level* *lambda-name* nil)]
       (gen-methods cw env methods))
-    (. cw visitEnd)))
+    (. cw visitEnd)
+    [dotname (.toByteArray cw) fv]))
 
 (defmethod compile 'lambda
   [[_ params & body :as lambda]]
   (when-not (get @*compiled-lambdas* lambda)
     (validate-params! params)
     (debug "Compiling:" lambda)
-    (let [
-          before-rest (complement #{rest-token})
-          restarg (second (drop-while before-rest params))
-]
-      (binding [*lambda-name* (if *top-level* *lambda-name* nil)]
-        (. cw visit Opcodes/V1_7 Opcodes/ACC_PUBLIC fqname nil "java/lang/Object" ifaces)
-        (gen-closure-fields cw fv)
-        (gen-ctor cw fqname fv)
-        (gen-body cw env body)
-        (gen-applier cw env)
-        (gen-handle cw env)
-        (. cw visitEnd))
-      (swap! *compiled-lambdas* conj lambda)
-      [dotname (.toByteArray cw) fv])))
+    (compile-lambda (vec (free-vars lambda)) (list (cons params body)))))
 
 (defmethod compile 'case-lambda
   [[_ & methods :as case-lambda]]
   (debug "Compiling:" case-lambda)
-  (let [fv (vec (free-vars case-lambda))
-        cw (ClassWriter. ClassWriter/COMPUTE_FRAMES)
-        lname (str (dotmunge (str (or *lambda-name* 'lambda))) "_" (next-id))
-        fqname (str "wombat/" lname)
-        dotname (.replace fqname "/" ".")
-        ifaces (into-array String ["wombat/ILambda"])]))
+  (compile-lambda (vec (free-vars case-lambda)) methods))
 
 (defn emit
   [env context gen form]
@@ -934,8 +917,8 @@
   (fn [_ _ _ form] (first form))
   :default -invoke-)
 
-(defmethod emit-seq 'lambda
-  [env context ^GeneratorAdapter gen [_ params & body :as lambda]]
+(defn emit-lambda
+  [env context ^GeneratorAdapter gen lambda]
   (when-not (= context :context/statement)
     (let [[dotname bytecode closed-overs] (binding [*top-level* nil]
                                             (compile lambda))]
@@ -947,6 +930,14 @@
           (emit-symbol env :context/expression gen (nth closed-overs n)))
         (. gen invokeConstructor (Type/getObjectType slashname)
            (Method. "<init>" Type/VOID_TYPE (into-array Type (repeat (count closed-overs) object-type))))))))
+
+(defmethod emit-seq 'case-lambda
+  [env context ^GeneratorAdapter gen case-lambda]
+  (emit-lambda env context gen case-lambda))
+
+(defmethod emit-seq 'lambda
+  [env context ^GeneratorAdapter gen [_ params & body :as lambda]]
+  (emit-lambda env context gen lambda))
 
 ;; (defmethod emit-seq 'define-class*
 ;;   [env context gen [_ fields :as defcls]])
