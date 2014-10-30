@@ -366,8 +366,8 @@
   (str "local_" (dotmunge (name lsym))))
 
 (defn handle-name
-  [arity restarg]
-  (str "handle_" arity (when restarg "_REST")))
+  [arity]
+  (str "handle_" arity))
 
 (defn gen-closure-fields
   [^ClassVisitor cv closed-overs]
@@ -469,19 +469,29 @@
   (. gen invokeVirtual (asmtype clojure.lang.Var) (Method/getMethod "Object invoke()"))
   (. gen pop))
 
+(defn fixed-arities
+  [arglists]
+  (sort (map count (remove #((set %) rest-token) arglists))))
+
+(defn variadic-arity
+  [arglists]
+  (if-let [varg (some #(and ((set %) rest-token) %) arglists)]
+    (dec (count varg))))
+
+(defn min-variadic-arity
+  [fixed variadic]
+  (when variradic
+    (if (= (last fixed) (dec variadic))
+      variadic
+      (dec variadic))))
+
 (defn gen-applier
   [^ClassWriter cw ^Type thistype arglists]
   (let [gen (GeneratorAdapter. Opcodes/ACC_PUBLIC (Method/getMethod "Object applyTo(Object)") nil nil cw)
-        bad-arity (. gen newLabel)
-        invoke-label (. gen newLabel)
         list-local (. gen newLocal (asmtype wombat.datatypes.List))
-        fixed-arities (sort (map count (remove #((set %) rest-token) arglists)))
-        variadic (if-let [varg (some #(and ((set %) rest-token) %) arglists)]
-                   (dec (count varg)))
-        min-varg-arity (when variadic
-                         (if (= (last fixed-arities) (dec variadic))
-                           variadic
-                           (dec variadic)))
+        fixed-arities (fixed-arities arglists)
+        variadic (variadic-arity arglists)
+        min-varg-arity (min-variadic-arity fixed-arities variadic)
         emit-list-cnt (fn []
                         (let [is-null (. gen newLabel)
                               end (. gen newLabel)]
@@ -521,7 +531,7 @@
                              (generateDefault [this]
                                (emit-arity-exception gen thistype emit-list-cnt)))]
       (emit-list-cnt)
-      (if variadic
+      (when variadic
         (. gen dup)
         (AsmUtil/pushInt gen min-varg-arity)
         (. gen ifCmp Type/INT_TYPE GeneratorAdapter/LT switch-label)
@@ -558,7 +568,7 @@
 (defn method-type
   [^GeneratorAdapter gen arity restarg]
   (. gen push object-type)
-  (let [positional (repeat arity Object)
+  (let [positional (repeat (if restarg (dec arity) arity) Object)
         sig (if restarg
               (conj (vec positional) object-array-class)
               positional)]
@@ -566,64 +576,90 @@
   (. gen invokeStatic (asmtype MethodType) (Method/getMethod "java.lang.invoke.MethodType methodType(Class,Class[])")))
 
 (defn gen-handle
-  [cw {:keys [params restarg ^Type thistype] :as env}]
+  [^ClassWriter cw ^Type thistype arglists]
   (debug "gen-handle" thistype)
   (let [^ClassVisitor cv cw
-        arity (count params)
-        handle (handle-name arity restarg)]
-    (. cv visitField (+ Opcodes/ACC_STATIC Opcodes/ACC_FINAL) handle
-       (.getDescriptor (asmtype MethodHandle)) nil nil)
-
+        fixed (fixed-arities arglists)
+        variadic (variadic-arity arglists)
+        arities (if variadic
+                  (concat fixed (list variadic))
+                  fixed)
+        min-varg-arity (min-variadic-arity fixed variadic)]
+    (doseq [arity arities]
+      (. cv visitField (+ Opcodes/ACC_STATIC Opcodes/ACC_FINAL) (handle-name arity)
+         (.getDescriptor (asmtype MethodHandle)) nil nil))
+    
     (let [clinitgen (GeneratorAdapter. (+ Opcodes/ACC_PUBLIC Opcodes/ACC_STATIC)
                                        (Method/getMethod "void <clinit>()")
                                        nil nil cw)
-          mt-local (. clinitgen newLocal (asmtype MethodType))]
+          mt-local (. clinitgen newLocal (asmtype MethodType))
+          store-handle (fn [arity variadic?]
+                         (method-type clinitgen arity variadic?)
+                         (. clinitgen storeLocal mt-local)
+
+                         (. clinitgen invokeStatic (asmtype MethodHandles) (Method/getMethod "java.lang.invoke.MethodHandles$Lookup lookup()"))
+
+                         (. clinitgen push thistype)
+                         (. clinitgen push "invoke")
+                         (. clinitgen loadLocal mt-local)
+                         (. clinitgen invokeVirtual (asmtype MethodHandles$Lookup)
+                            (Method/getMethod "java.lang.invoke.MethodHandle findVirtual(Class,String,java.lang.invoke.MethodType)"))
+
+                         (. clinitgen loadLocal mt-local)
+                         (AsmUtil/pushInt clinitgen 0)
+                         (emit-array clinitgen Class [ILambda])
+                         (. clinitgen invokeVirtual (asmtype MethodType)
+                            (Method/getMethod "java.lang.invoke.MethodType insertParameterTypes(int,Class[])"))
+
+                         (when variadic?
+                           (. clinitgen push (asmtype object-array-class))
+                           (. clinitgen invokeVirtual (asmtype MethodHandle)
+                              (Method/getMethod "java.lang.invoke.MethodHandle asVarargsCollector(Class)")))
+
+                         (. clinitgen invokeVirtual (asmtype MethodHandle)
+                            (Method/getMethod "java.lang.invoke.MethodHandle asType(java.lang.invoke.MethodType)"))
+                         (. clinitgen putStatic thistype (handle-name arity) (asmtype MethodHandle)))]
       (. clinitgen visitCode)
-      (method-type clinitgen arity restarg)
-      (. clinitgen storeLocal mt-local)
 
-      (. clinitgen invokeStatic (asmtype MethodHandles) (Method/getMethod "java.lang.invoke.MethodHandles$Lookup lookup()"))
-      (. clinitgen push thistype)
-      (. clinitgen push "invoke")
-      (. clinitgen loadLocal mt-local)
-      (. clinitgen invokeVirtual (asmtype MethodHandles$Lookup)
-         (Method/getMethod "java.lang.invoke.MethodHandle findVirtual(Class,String,java.lang.invoke.MethodType)"))
-
-      (. clinitgen loadLocal mt-local)
-      (AsmUtil/pushInt clinitgen 0)
-      (emit-array clinitgen Class [ILambda])
-      (. clinitgen invokeVirtual (asmtype MethodType)
-         (Method/getMethod "java.lang.invoke.MethodType insertParameterTypes(int,Class[])"))
-
-      (. clinitgen invokeVirtual (asmtype MethodHandle)
-         (Method/getMethod "java.lang.invoke.MethodHandle asType(java.lang.invoke.MethodType)"))
-      (when restarg
-        (. clinitgen push (asmtype object-array-class))
-        (. clinitgen invokeVirtual (asmtype MethodHandle)
-           (Method/getMethod "java.lang.invoke.MethodHandle asVarargsCollector(Class)")))
-      (. clinitgen putStatic thistype handle (asmtype MethodHandle))
+      (doseq [f fixed]
+        (store-handle f false))
+      (when variadic
+        (store-handle variadic true))
 
       (. clinitgen returnValue)
       (. clinitgen endMethod))
 
     (let [gen (GeneratorAdapter. Opcodes/ACC_PUBLIC
                                  (Method/getMethod "java.lang.invoke.MethodHandle getHandle(int)")
-                                 nil nil cw)
-          false-label (. gen newLabel)
-          end-label (. gen newLabel)]
+                                 nil nil cw)]
       (. gen visitCode)
-      (. gen loadArg 0)
-      (AsmUtil/pushInt gen arity)
-      (if restarg
-        (. gen ifCmp Type/INT_TYPE GeneratorAdapter/LT false-label)
-        (. gen ifCmp Type/INT_TYPE GeneratorAdapter/NE false-label))
 
-      (. gen getStatic thistype handle (asmtype MethodHandle))
-      (. gen goTo end-label)
-      
-      (. gen mark false-label)
-      (emit-arity-exception gen arity restarg #(. gen loadArg 0))
-      (. gen mark end-label)
+      (let [min-varg-arity (when variadic
+                             (if (= (last fixed) (dec variadic))
+                               variadic
+                               (dec variadic)))
+            switch-label (. gen newLabel)
+            end-switch-label (. gen newLabel)
+            switch-generator (reify TableSwitchGenerator
+                               (generateCase [this key end]
+                                 (. gen getStatic thistype (handle-name key) (asmtype MethodHandle))
+                                 (. gen goTo end))
+                               (generateDefault [this]
+                                 (emit-arity-exception gen thistype #(. gen loadArg 0))))]
+        (. gen loadArg 0)
+        (when variadic
+          (. gen dup)
+          (AsmUtil/pushInt gen min-varg-arity)
+          (. gen ifCmp Type/INT_TYPE GeneratorAdapter/LT switch-label)
+          (. gen pop) ; pop arity arg
+          (. gen getStatic thistype (handle-name variadic) (asmtype MethodHandle))
+          (. gen goTo end-switch-label))
+        
+        (. gen mark switch-label)
+        ;; arity arg is on stack
+        (. gen switchTable (int-array fixed) end-switch-label)
+        (. gen mark end-switch-label))
+    
       (. gen returnValue)
       (. gen endMethod))))
 
