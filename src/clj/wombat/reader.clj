@@ -323,7 +323,9 @@
   (let [c (.read rdr)]
     (when (= -1 c)
       (throw (RuntimeException. "EOF while reading #! form")))
-    (let [specials #{"rest" "optional"} ; not sure what else right now
+    (let [specials #{"rest"
+                     ;;"optional"
+                     } ; not sure what else right now
           tok (read-token rdr c)]
       (if (contains? specials tok)
         (symbol (str "#!" (specials tok)))

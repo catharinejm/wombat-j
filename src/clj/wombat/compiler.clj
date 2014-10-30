@@ -42,10 +42,9 @@
 (defn list-like?
   "True if the given value implements clojure.lang.Seqable. Note that
   that does NOT include all types which can be seq'd. Only internal
-  Clojure collection types."
+  Clojure collection types and wombat.datatypes.List."
   [o]
-  (and (instance? clojure.lang.Seqable o)
-       (not (vector? o))))
+  (instance? clojure.lang.Seqable o))
 
 (defonce -id- (atom -1))
 (defn next-id []
@@ -58,6 +57,7 @@
 
 (def specials
   #{'lambda
+    'case-lambda
     'let
     'letrec
     'if
@@ -143,11 +143,57 @@
    :else
    params))
 
+(defn sanitize-method
+  [env params body]
+  (let [method-env (extend-env env params)]
+    (list* (map (partial substitute method-env) params)
+           (map (partial sanitize method-env) body))))
+
+(defn validate-rest-token!
+  [params]
+  (when-let [rest (seq (drop-while (complement special-token?) variadic))]
+    (when (not= (count rest) 2)
+      (throw (IllegalArgumentException. "invalid placement of #!rest token")))))
+
+(defn validate-unique-names!
+  [params]
+  (doseq [p params]
+    (when (> (count (filter #{p} params)) 1)
+      (throw (IllegalArgumentException. (str "duplicate parameter name: " p))))))
+
+(defn validate-params!
+  [params]
+  (validate-rest-token! params)
+  (validate-unique-names! params))
+
+(defn validate-arities
+  [methods]
+  (let [params (map #(expand-params (first %)) methods)
+        variadic (seq (filter #(some special-token? %) params))]
+    (doseq [v variadic] (validate-rest-token! v))
+    (when (> (count variadic) 1)
+      (throw (IllegalArgumentException. "case-lambda only accepts one variadic overload")))
+    (doseq [p params] (validate-unique-names! p))
+    (when (and variadic
+               (>= (apply max (map count (remove #(some special-token? %) params)))
+                   (dec (count (first variadic)))))
+      (throw (IllegalArgumentException. "case-lambda can't have a fixed arity with more params than the variadic")))
+    (when (not= (count (set (map #(count (remove special-token? %)) params)))
+                (count params))
+      (throw (IllegalArgumentException. "case-lambda can't have two overloads with the same arity")))
+    (map #(cons %1 (rest %2))
+         params methods)))
+
 (defn sanitize-lambda
   [env [_ params & body :as form]]
-  (let [params (expand-params params)
-        lambda-env (extend-env env params)]
-    (list* 'lambda (map (partial substitute lambda-env) params) (map (partial sanitize lambda-env) body))))
+  (let [params (expand-params params)]
+    (validate-params! params)
+    (cons 'lambda (sanitize-method params body))))
+
+(defn sanitize-case-lambda
+  [env [_ methods :as form]]
+  (for [[params & body] (validate-arities methods)]
+    ))
 
 (defn named-let
   [[_ name bindings & body]]
@@ -195,9 +241,11 @@
   [env form]
   (if (seq form)
     (condp #(and (contains? %1 (first %2)) %2) form
-      #{'quote} :>> (fn [[_ val]] (list 'quote val))
+      #{'quote} form
 
       #{'lambda} :>> (partial sanitize-lambda env)
+
+      #{'case-lambda} :>> (partial sanitize-case-lambda env)
 
       #{'let} :>> (partial sanitize-let env)
 
