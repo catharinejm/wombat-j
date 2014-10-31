@@ -1,6 +1,7 @@
 package wombat;
 
 import java.lang.invoke.*;
+import java.util.Arrays;
 import clojure.lang.*;
 
 public class Global {
@@ -34,26 +35,12 @@ public class Global {
         return site;
     }
 
-    public static Object invokeLambda(ILambda lambda, Object[] args) {
-        try {
-            MethodHandle handle = lambda.getHandle(args.length);
-            Object ret;
-            int arity = handle.type().parameterCount() - 1; // first parameter is ILambda
-            if (handle.isVarargsCollector() && args.length >= arity - 1) {
-                Object[] newArgs = new Object[arity];
-                Object[] varArgs = new Object[args.length - arity + 1];
-                System.arraycopy(args, 0, newArgs, 0, arity - 1);
-                System.arraycopy(args, arity - 1, varArgs, 0, args.length - arity + 1);
-                newArgs[arity - 1] = varArgs;
-
-                ret = handle.asFixedArity().asSpreader(Object[].class, arity).invoke(lambda, newArgs);
-            } else
-                ret = handle.asSpreader(Object[].class, args.length).invoke(lambda, args);
-
-            while (ret instanceof Continuation)
-                ret = ((Continuation)ret).invoke();
-            return ret;
-        } catch (Throwable t) { throw Util.sneakyThrow(t); }
+    
+    public static Object invokeLambda(ILambda lambda, Object... args) {
+        Object ret = lambda.applyTo(JAVALIST_TO_LIST.invoke(Arrays.asList(args)));
+        while (ret instanceof Continuation)
+            ret = ((Continuation)ret).invoke();
+        return ret;
     }
 
 }
