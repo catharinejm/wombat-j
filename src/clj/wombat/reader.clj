@@ -120,9 +120,19 @@
 
 (defn read-number
   [^LineNumberingPushbackReader rdr c]
-  (let [tok (read-token rdr c)]
-    (or (match-number tok)
-        (throw (NumberFormatException. (str "Invalid number: " tok))))))
+  (let [sb (StringBuilder.)]
+    (.append sb (char c))
+    (loop []
+      (let [c (.read rdr)]
+        (if (or (= -1 c)
+                (Character/isWhitespace c)
+                (contains? form-tokens (char c)))
+          (unread rdr c)
+          (do
+            (.append sb (char c))
+            (recur)))))
+    (or (match-number (.toString sb))
+        (throw (NumberFormatException. (str "Invalid number: " (.toString sb)))))))
 
 (defmulti read-form
   (fn [rdr c] (form-tokens (char c))))
