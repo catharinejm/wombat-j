@@ -191,7 +191,7 @@
     (cons 'lambda (sanitize-method env params body))))
 
 (defn sanitize-case-lambda
-  [env [_ methods :as form]]
+  [env [_ & methods :as form]]
   (cons 'case-lambda
         (for [[params & body] (validate-arities methods)]
           (sanitize-method env params body))))
@@ -421,10 +421,13 @@
         top-label (. gen newLabel)
         env (assoc env :top-label top-label)]
     (. gen visitCode)
-    (. gen mark top-label)
     (when rest-id
       (emit-list-from-array gen #(. gen loadArg (count params)))
-      (. gen storeLocal rest-id))
+      (. gen storeLocal rest-id)
+      (. gen visitInsn Opcodes/ACONST_NULL)
+      (. gen storeArg (count params)))
+
+    (. gen mark top-label)
     (emit-body env :context/return gen body)
     (. gen returnValue)
     (. gen endMethod)))
@@ -479,11 +482,13 @@
     (dec (count varg))))
 
 (defn min-variadic-arity
-  [fixed variadic]
-  (when variadic
-    (if (= (last fixed) (dec variadic))
-      variadic
-      (dec variadic))))
+  ([arglists] (min-variadic-arity (fixed-arities arglists)
+                                  (variadic-arity arglists)))
+  ([fixed variadic]
+     (when variadic
+       (if (= (last fixed) (dec variadic))
+         variadic
+         (dec variadic)))))
 
 (defn gen-applier
   [^ClassWriter cw ^Type thistype arglists]
@@ -684,7 +689,8 @@
     (doseq [[params & body] methods]
       (let [env (assoc env
                   :params (take-while before-rest params)
-                  :restarg (second (drop-while before-rest params)))]
+                  :restarg (second (drop-while before-rest params))
+                  :arglists arglists)]
         (gen-body cw env body)))
     (gen-applier cw thistype arglists)
     (gen-handle cw thistype arglists)))
@@ -1007,14 +1013,16 @@
   [env context ^GeneratorAdapter gen [_ name val :as form]]
   (when (> (count form) 3)
     (throw (IllegalArgumentException. "define only takes one value")))
-  (set-global! name (eval* val))
+  (binding [*lambda-name* name]
+    (set-global! name (eval* val)))
   (emit env context gen name))
 
 (defmethod emit-seq 'define-macro
   [env context ^GeneratorAdapter gen [_ name val :as form]]
   (when (> (count form) 3)
     (throw (IllegalArgumentException. "define-macro only takes one value")))
-  (set-macro! name (eval* val))
+  (binding [*lambda-name* name]
+    (set-macro! name (eval* val)))
   (emit env context gen name))
 
 (defmethod emit-seq 'if
@@ -1174,31 +1182,36 @@
           (list 'let (list (list res (explode-invocation call)))
                 res))))
 
+(defn arity-match?
+  [{:keys [restarg params arglists] :as env} args]
+  (if restarg
+    (>= (count args) (min-variadic-arity arglists))
+    (= (count args) (count params))))
+
 (defn emit-tail-call
-  [{:keys [recur-sym restarg top-label params] :as env} ^GeneratorAdapter gen [fun & args :as call]]
-  (if (= fun recur-sym)
+  [{:keys [recur-sym restarg top-label params locals] :as env} ^GeneratorAdapter gen [fun & args :as call]]
+  (if (and (= fun recur-sym)
+           (arity-match? env args))
                                         ; Self call, becomes loop
     (do
       (debug "emitting self tail-call: " call)
-      (when (or (and restarg (< (count args) (count params)))
-                (not= (count args) (count params)))
-        (throw (IllegalArgumentException.
-                (str "Wrong number of args (" (count args) " for " (count params) (when restarg "+") ")"))))
                                         ; emit all new values
       (dotimes [n (count params)]
         (emit env :context/expression gen (nth args n)))
       (when restarg
-        (let [extra (seq (drop (count params) args))]
-          (AsmUtil/pushInt gen (count extra))
-          (. gen newArray object-type)
-          (dotimes [n (count extra)]
-            (. gen dup)
-            (AsmUtil/pushInt gen n)
-            (emit env :context/expression gen (nth extra n))
-            (. gen arrayStore object-type))))
+        (emit-list-from-array gen
+                              #(let [extra (drop (count params) args)]
+                                 (AsmUtil/pushInt gen (count extra))
+                                 (. gen newArray object-type)
+                                 (dotimes [n (count extra)]
+                                   (. gen dup)
+                                   (AsmUtil/pushInt gen n)
+                                   (emit env :context/expression gen (nth extra n))
+                                   (. gen arrayStore object-type))))
+        (. gen storeLocal (get locals restarg)))
                                         ; store them in reverse order from stack
       (dotimes [n (count params)]
-        (. gen storeArg (- (count params) n (if restarg 0 1))))
+        (. gen storeArg (- (count params) n 1)))
       (. gen goTo top-label))
                                         ; Calls another fn, return continuation thunk
     (do
