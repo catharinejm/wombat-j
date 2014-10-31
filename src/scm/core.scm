@@ -65,6 +65,7 @@
            (box boolean))))
 
 (define (list? x)
+  (#:println "original list?")
   (#:wombat.datatypes/list? x))
 
 (define (pair? x)
@@ -82,6 +83,16 @@
 (define (reverse lis)
   (foldl cons '() lis))
 
+(define (list! o)
+  (#:jvm (#:emit o)
+         (instanceOf wombat.datatypes.List)
+         (ifZCmp = #:not-list)
+         (#:emit o)
+         (goto #:end)
+         (label #:not-list)
+         (#:invoke #:wombat.datatypes/seq->list o)
+         (label #:end)))
+
 (define (list* . ls)
   (if (null? ls)
     '()
@@ -90,11 +101,19 @@
         (#:jvm (throwException IllegalArgumentException "list* expects list as final arg")))
       (foldl cons (car rlis) (cdr rlis)))))
 
-(define (apply f args)
-  (#:jvm (#:emit f)
-         (checkCast wombat.ILambda)
-         (#:emit args)
-         (invokeInterface wombat.ILambda (Object "applyTo" Object))))
+(define apply
+  (case-lambda
+    ([f] (f))
+    ([f args] (#:jvm (#:emit f)
+                     (checkCast wombat.ILambda)
+                     (#:emit args)
+                     (invokeInterface wombat.ILambda (Object "applyTo" Object))))
+    ([f x args]
+     (apply f (cons x args)))
+    ([f x y args]
+     (apply f (cons x (cons y args))))
+    ([f x y z . rest]
+     (apply f (cons x (cons y (cons z (apply list* rest))))))))
 
 (define (quasiquote-pair* c l ls)
   (if (null? c)
@@ -108,9 +127,13 @@
           (quasiquote-pair* (cdr c)
                             '()
                             (list* (car (cdr (car c))) (cons 'list (reverse l)) ls))
-          (quasiquote-pair* (cdr c)
-                            (cons (quasiquote-pair* (car c) '() '()) l)
-                            ls)))
+          (if (eqv? (car (car c)) 'quasiquote)
+            (quasiquote-pair* (cdr c)
+                              (cons (car c) l)
+                              ls)
+            (quasiquote-pair* (cdr c)
+                              (cons (quasiquote-pair* (car c) '() '()) l)
+                              ls))))
       (quasiquote-pair* (cdr c) (cons (list 'quote (car c)) l) ls))))
 
 (define-macro (quasiquote x)
@@ -246,6 +269,10 @@
          (begin ,@(cdar conds))
          (cond* ,@(cdr conds))))))
 
+(define-macro (define-case name . methods)
+  `(define ,name
+     (case-lambda ,@methods)))
+
 (define (not* o)
   (if-not* o
     #t
@@ -257,16 +284,6 @@
     (if (null? (cdr lis))
       (car lis)
       (last (cdr lis)))))
-
-(define (instance? cls o)
-  (#:jvm (#:emit cls)
-         (checkCast Class)
-         (#:emit o)
-         (invokeVirtual Class (boolean "isInstance" Object))
-         (box boolean)))
-
-(define (string? o)
-  (instance? String o))
 
 ;; (define-macro new
 ;;   (lambda (c)
@@ -323,15 +340,31 @@
   (#:jvm (#:emit n)
          (invokeStatic clojure.lang.Numbers (Number "decP" Object))))
 
-(define (+ x y)
-  (#:jvm (#:emit x)
-         (#:emit y)
-         (invokeStatic clojure.lang.Numbers (Number "addP" Object Object))))
+(define (swap f)
+  (case-lambda
+    ([] (f))
+    ([x] (f x))
+    ([x y] (f y x))
+    ([x y . zs] (apply f y x zs))))
 
-(define (- x y)
-  (#:jvm (#:emit x)
-         (#:emit y)
-         (invokeStatic clojure.lang.Numbers (Number "subP" Object Object))))
+(define-case +
+  ([] 1)
+  ([x] x)
+  ([x y]
+   (#:jvm (#:emit x)
+          (#:emit y)
+          (invokeStatic clojure.lang.Numbers (Number "addP" Object Object))))
+  ([x y . zs]
+   (foldl + (+ x y) zs)))
+
+(define-case -
+  ([x] (- 0 x))
+  ([x y]
+   (#:jvm (#:emit x)
+          (#:emit y)
+          (invokeStatic clojure.lang.Numbers (Number "minusP" Object Object))))
+  ([x y . zs]
+   (foldl (swap -) (- x y) zs)))
 
 (define (* x y)
   (#:jvm (#:emit x)
@@ -372,6 +405,65 @@
          (#:emit y)
          (invokeStatic clojure.lang.Numbers (boolean "equiv" Object Object))
          (box boolean)))
+
+(define-macro (add-inline name . lam)
+  (if (pair? name)
+    `(add-inline ,(car name) (lambda ,(cdr name) ,@lam))
+    (if (> (length lam) 1)
+      (fail "add-inline only takes one lambda")
+      `(#:wombat.compiler/add-inline! ',name ,@lam))))
+
+(define-macro (reify-macro name . lam)
+  (if (pair? name)
+    `(reify-macro ,(car name)
+                  (lambda ,(cdr name) ,@lam))
+    (if (> (length lam) 1)
+      (fail "reify-macro only takes one lambda")
+      `(#:wombat.compiler/add-function! ',name ,@lam))))
+
+(define-macro (define-with-inline name macro fun)
+  `(begin
+     (define-macro ,name ,macro)
+     (reify-macro ,name ,fun)))
+
+(define-macro (<instanceof> cls o)
+  (list #:jvm
+        (list #:emit o)
+        (list 'instanceOf cls)
+        (list 'box 'boolean)))
+
+(define (resolve-class sym)
+  (let ([cls (#:wombat.compiler/clean-resolve sym)])
+    (#:jvm (#:emit cls)
+           (instanceOf Class)
+           (ifZCmp not= #:is-class)
+           (#:emit #f)
+           (goto #:end)
+           (label #:is-class)
+           (#:emit cls)
+           (label #:end))))
+
+(define (instance? c o)
+  (#:jvm (#:emit c)
+         (checkCast Class)
+         (#:emit o)
+         (invokeVirtual Class (boolean "isInstance" Object))
+         (box boolean)))
+
+(add-inline (instance? c o)
+  (if (and (#:jvm (#:macro <instanceof> clojure.lang.Symbol c))
+           (resolve-class c))
+    (list '<instanceof> c o)
+    #!no-op))
+
+;; Redefine list? and pair? using faster instance?
+(define (list? o)
+  (or (null? o)
+      (instance? wombat.datatypes.IList o)))
+(define (pair? o)
+  (instance? wombat.datatypes.ICons o))
+(define (string? o)
+  (instance? String o))
 
 (define (fac n)
   (let loop ((n n)

@@ -51,6 +51,8 @@
   (swap! -id- inc'))
 
 (def rest-token (symbol "#!rest"))
+(def noop-token (symbol "#!no-op"))
+(def rest-token? #{rest-token})
 (defn special-token?
   [sym]
   (.startsWith (str sym) "#!"))
@@ -67,8 +69,7 @@
     'quote
     'begin
     'unquote
-    'unquote-splicing
-    rest-token})
+    'unquote-splicing})
 
 (defn sanitize-name
   [sym]
@@ -95,8 +96,11 @@
      (contains? env sym)
      (env sym)
 
+     (special-token? sym)
+     sym
+
      (contains? specials sym)
-     (specials sym)
+     sym
 
      (contains? @global-bindings sym)
      sym
@@ -117,9 +121,15 @@
                                (not (contains? specials (first form)))
                                (get-in @global-bindings [(first form) :macro]))]
     (loop [expanded (.applyTo macro (cdr (seq->list form)))]
-      (if (instance? wombat.Continuation expanded)
-        (recur (.invoke ^wombat.Continuation expanded))
-        expanded))
+      (cond
+       (instance? wombat.Continuation expanded)
+       (recur (.invoke ^wombat.Continuation expanded))
+
+       (= noop-token expanded)
+       form
+
+       :else
+       expanded))
     form))
 
 (defn expand
@@ -151,7 +161,7 @@
 
 (defn validate-rest-token!
   [params]
-  (when-let [rest (seq (drop-while (complement special-token?) params))]
+  (when-let [rest (seq (drop-while (complement rest-token?) params))]
     (when (not= (count rest) 2)
       (throw (IllegalArgumentException. "invalid placement of #!rest token")))))
 
@@ -169,16 +179,16 @@
 (defn validate-arities
   [methods]
   (let [params (map #(expand-params (first %)) methods)
-        variadic (seq (filter #(some special-token? %) params))]
+        variadic (seq (filter #(some rest-token? %) params))]
     (doseq [v variadic] (validate-rest-token! v))
     (when (> (count variadic) 1)
       (throw (IllegalArgumentException. "case-lambda only accepts one variadic overload")))
     (doseq [p params] (validate-unique-names! p))
     (when (and variadic
-               (>= (apply max (map count (remove #(some special-token? %) params)))
+               (>= (apply max (map count (remove #(some rest-token? %) params)))
                    (dec (count (first variadic)))))
       (throw (IllegalArgumentException. "case-lambda can't have a fixed arity with more params than the variadic")))
-    (when (not= (count (set (map #(count (remove special-token? %)) params)))
+    (when (not= (count (set (map #(count (remove rest-token? %)) params)))
                 (count params))
       (throw (IllegalArgumentException. "case-lambda can't have two overloads with the same arity")))
     (map #(cons %1 (rest %2))
@@ -233,7 +243,7 @@
   (if-not (symbol? name)
     (let [[name & params] (expand-params name)]
       (when (or (nil? name)
-                (special-token? name))
+                (rest-token? name))
         (throw (IllegalArgumentException. "Invalid lambda define: " form)))
       (recur env (list define name (list* 'lambda params val))))
     (list* define name (map (partial sanitize (assoc env name name)) val))))
@@ -292,12 +302,12 @@
      (['quote val] :seq) (sorted-set)
 
      (['lambda params & body] :seq)
-     (apply disj (free-vars body) (cons *lambda-name* (remove special-token? params)))
+     (apply disj (free-vars body) (cons *lambda-name* (remove rest-token? params)))
 
      (['case-lambda & methods] :seq)
      (reduce into (sorted-set)
              (map #(apply disj (free-vars (second %))
-                          (cons *lambda-name* (remove special-token? (first %))))
+                          (cons *lambda-name* (remove rest-token? (first %))))
                   methods))
 
      ([(:or 'let 'letrec) bindings & body] :seq)
@@ -310,6 +320,9 @@
               (cons name (map first bindings))))
 
      (['define name & val] :seq)
+     (disj (free-vars val) name)
+
+     (['define-macro name & val] :seq)
      (disj (free-vars val) name)
 
      ;; define-class* is not a closure, leave free vars uncollected
@@ -327,6 +340,7 @@
      (reduce into (sorted-set) (map free-vars form)))
 
    (and (symbol? form)
+        (not (special-token? form))
         (not (contains? specials form))
         (not (contains? @global-bindings form))
         (not= *current-define* form)
@@ -751,8 +765,6 @@
 
 (defn emit-global
   [^GeneratorAdapter gen sym]
-  (when (:macro (@global-bindings sym))
-    (throw (RuntimeException. (str "Can't take the value of a macro: " sym))))
   (. gen invokeDynamic "getGlobal"
      (.toMethodDescriptorString (MethodType/methodType Object (make-array Class 0)))
      global-bootstrap
@@ -762,6 +774,9 @@
   [{:keys [params closed-overs locals thistype recur-sym] :as env} context gen sym]
   (debug "emit-symbol: " sym)
   (cond
+   (special-token? sym)
+   (emit-value context gen sym)
+   
    ((set params) sym)
    (. gen loadArg (.indexOf params sym))
 
@@ -996,8 +1011,7 @@
 (defn macro-handle
   [sym]
   (. (MethodHandles/throwException Object RuntimeException)
-     (bindTo (RuntimeException. (str "Can't take the value of a macro: " sym
-                                     " - You have overridden an existing global value.")))))
+     (bindTo (RuntimeException. (str "Can't take the value of a macro: " sym)))))
 
 (defn set-macro!
   [sym value]
@@ -1008,6 +1022,26 @@
     (swap! global-bindings assoc sym {:macro value
                                       :call-site site}))
   sym)
+
+(defn add-inline!
+  [sym value]
+  (cast Symbol sym)
+  (cast ILambda value)
+  (when-not (contains? @global-bindings sym)
+    (throw (IllegalStateException. (str sym " is not an existing global binding"))))
+  (swap! global-bindings assoc-in [sym :macro] value)
+  sym)
+
+(defn add-function!
+  [sym value]
+  (cast Symbol sym)
+  (cast ILambda value)
+  (when-not (get-in @global-bindings [sym :macro])
+    (throw (IllegalStateException. (str sym " is not an existing macro"))))
+  (swap! global-bindings
+         assoc-in [sym :call-site]
+         (update-global-handle sym (MethodHandles/constant Object value)))
+  value)
 
 (defmethod emit-seq 'define
   [env context ^GeneratorAdapter gen [_ name val :as form]]

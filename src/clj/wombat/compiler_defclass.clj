@@ -40,10 +40,10 @@
   (assert-min-arity! form 1)
   (emit-seq env :context/expression gen (cons fun args)))
 
-(defmethod emit-jvm :apply
-  [env context ^GeneratorAdapter gen [_ fun args :as form]]
-  (assert-arity! form 2)
-  (emit-seq env :context/expression gen (list* fun args)))
+(defmethod emit-jvm :macro
+  [env context ^GeneratorAdapter gen [_ macro & args :as form]]
+  (assert-min-arity! form 1)
+  (emit-jvm env context gen (expand (cons macro args))))
 
 (defn add-label
   [{labels :labels} ^GeneratorAdapter gen lname]
@@ -68,6 +68,11 @@
    '<= GeneratorAdapter/LE
    '> GeneratorAdapter/GT
    '>= GeneratorAdapter/GE})
+
+(defn get-op
+  [op]
+  (or (cmp-ops op)
+      (throw (IllegalArgumentException. (str "Invalid comparison op: " op)))))
 
 (defn maybe-prim-resolve
   [sym]
@@ -105,9 +110,12 @@
 (defmethod emit-jvm 'ifCmp
   [env context ^GeneratorAdapter gen [_ type op lname :as form]]
   (assert-arity! form 3)
-  (when-not (contains? cmp-ops op)
-    (throw (IllegalArgumentException. (str "Invalid comparison op: " op))))
-  (. gen ifCmp (resolve-asm type) (cmp-ops op) (label env gen lname)))
+  (. gen ifCmp (resolve-asm type) (get-op op) (label env gen lname)))
+
+(defmethod emit-jvm 'ifZCmp
+  [env context ^GeneratorAdapter gen [_ op lname :as form]]
+  (assert-arity! form 2)
+  (. gen ifZCmp (get-op op) (label env gen lname)))
 
 (defmethod emit-jvm 'label
   [{:keys [labels] :as env} context ^GeneratorAdapter gen [_ lname :as form]]
@@ -193,6 +201,11 @@
   [env context ^GeneratorAdapter gen [_ owner fname ftype :as form]]
   (assert-arity! form 3)
   (. gen putField (resolve-asm owner) fname (resolve-asm ftype)))
+
+(defmethod emit-jvm 'instanceOf
+  [env context ^GeneratorAdapter gen [_ type :as form]]
+  (assert-arity! form 1)
+  (. gen instanceOf (resolve-asm type)))
 
 (defmethod emit-jvm 'throwException
   [env context ^GeneratorAdapter gen [_ type? msg? :as form]]

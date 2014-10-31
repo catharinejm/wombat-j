@@ -116,7 +116,8 @@
     float-re (Double/parseDouble numstr)
 
     ratio-re :>> (fn [[_ numerator denominator]]
-                   (Numbers/divide (BigInteger. numerator) (BigInteger. denominator)))))
+                   (Numbers/divide (BigInteger. numerator) (BigInteger. denominator)))
+    nil))
 
 (defn read-number
   [^LineNumberingPushbackReader rdr c]
@@ -334,6 +335,7 @@
     (when (= -1 c)
       (throw (RuntimeException. "EOF while reading #! form")))
     (let [specials #{"rest"
+                     "no-op"
                      ;;"optional"
                      } ; not sure what else right now
           tok (read-token rdr c)]
