@@ -44,7 +44,8 @@
   that does NOT include all types which can be seq'd. Only internal
   Clojure collection types and wombat.datatypes.List."
   [o]
-  (instance? clojure.lang.Seqable o))
+  (and (instance? clojure.lang.Seqable o)
+       (not (vector? o))))
 
 (defonce -id- (atom -1))
 (defn next-id []
@@ -244,7 +245,7 @@
     (let [[name & params] (expand-params name)]
       (when (or (nil? name)
                 (rest-token? name))
-        (throw (IllegalArgumentException. "Invalid lambda define: " form)))
+        (throw (IllegalArgumentException. (str "Invalid lambda define: " (write-str form)))))
       (recur env (list define name (list* 'lambda params val))))
     (list* define name (map (partial sanitize (assoc env name name)) val))))
 
@@ -1066,63 +1067,65 @@
     (throw (IllegalArgumentException. "if takes 2 or 3 forms")))
   (let [false-label (. gen newLabel)
         end-label (. gen newLabel)]
-    (cond
+                                        ; continuation must always be exploded for condition
+    (binding [*return-continuations* false]
+      (cond
                                         ; optimize common case (if (null? ...) ...)
-     (and (list-like? condition) (= (first condition) 'null?))
-     (do
-       (when (not= (count condition) 2)
-         (throw (IllegalArgumentException. "null? takes exactly one argument")))
-       (emit env :context/expression gen (second condition))
-       (. gen ifNonNull false-label))
+       (and (list-like? condition) (= (first condition) 'null?))
+       (do
+         (when (not= (count condition) 2)
+           (throw (IllegalArgumentException. "null? takes exactly one argument")))
+         (emit env :context/expression gen (second condition))
+         (. gen ifNonNull false-label))
 
                                         ; optimize common case (if (not (null? ...)) ...)
-     (and (list-like? condition) (= (first condition) 'not)
-          (list-like? (second condition)) (= (first (second condition)) 'null?))
-     (do
-       (when (not= (count condition) 2)
-         (throw (IllegalArgumentException. "not takes exactly one argument")))
-       (when (not= (count (second condition)) 2)
-         (throw (IllegalArgumentException. "null? takes exactly one argument")))
-       (emit env :context/expression gen (second (second condition)))
-       (. gen ifNull false-label))
+       (and (list-like? condition) (= (first condition) 'not)
+            (list-like? (second condition)) (= (first (second condition)) 'null?))
+       (do
+         (when (not= (count condition) 2)
+           (throw (IllegalArgumentException. "not takes exactly one argument")))
+         (when (not= (count (second condition)) 2)
+           (throw (IllegalArgumentException. "null? takes exactly one argument")))
+         (emit env :context/expression gen (second (second condition)))
+         (. gen ifNull false-label))
 
                                         ; optimize common case (if (eq? ...) ...)
-     (and (list-like? condition) (= (first condition) 'eq?))
-     (do
-       (when (not= (count condition) 3)
-         (throw (IllegalArgumentException. "eq? takes exactly 2 arguments")))
-       (let [[_ a b] condition]
-         (emit env :context/expression gen a)
-         (emit env :context/expression gen b)
-         (. gen ifCmp object-type GeneratorAdapter/NE false-label)))
+       (and (list-like? condition) (= (first condition) 'eq?))
+       (do
+         (when (not= (count condition) 3)
+           (throw (IllegalArgumentException. "eq? takes exactly 2 arguments")))
+         (let [[_ a b] condition]
+           (emit env :context/expression gen a)
+           (emit env :context/expression gen b)
+           (. gen ifCmp object-type GeneratorAdapter/NE false-label)))
 
                                         ; optimize common case (if (not (eq? ...)) ...)
-     (and (list-like? condition) (= (first condition) 'not)
-          (list-like? (second condition)) (= (fnext condition) 'eq?))
-     (do
-       (when (not= (count condition) 2)
-         (throw (IllegalArgumentException. "not takes exactly one argument")))
-       (when (not= (count (second condition)) 3)
-         (throw (IllegalArgumentException. "eq? takes exactly two arguments")))
-       (let [[_ a b] (second condition)]
-         (emit env :context/expression gen a)
-         (emit env :context/expression gen b)
-         (. gen ifCmp object-type GeneratorAdapter/EQ false-label)))
+       (and (list-like? condition) (= (first condition) 'not)
+            (list-like? (second condition)) (= (fnext condition) 'eq?))
+       (do
+         (when (not= (count condition) 2)
+           (throw (IllegalArgumentException. "not takes exactly one argument")))
+         (when (not= (count (second condition)) 3)
+           (throw (IllegalArgumentException. "eq? takes exactly two arguments")))
+         (let [[_ a b] (second condition)]
+           (emit env :context/expression gen a)
+           (emit env :context/expression gen b)
+           (. gen ifCmp object-type GeneratorAdapter/EQ false-label)))
 
                                         ; optimize common case (if (not ...) ...)
-     (and (list-like? condition) (= (first condition) 'not))
-     (do
-       (when (not= (count condition) 2)
-         (throw (IllegalArgumentException. "not takes exactly one argument")))
-       (emit env :context/expression gen (second condition))
-       (. gen getStatic boolean-object-type "FALSE" boolean-object-type)
-       (. gen ifCmp boolean-object-type GeneratorAdapter/NE false-label))
+       (and (list-like? condition) (= (first condition) 'not))
+       (do
+         (when (not= (count condition) 2)
+           (throw (IllegalArgumentException. "not takes exactly one argument")))
+         (emit env :context/expression gen (second condition))
+         (. gen getStatic boolean-object-type "FALSE" boolean-object-type)
+         (. gen ifCmp boolean-object-type GeneratorAdapter/NE false-label))
 
-     :else
-     (do
-       (emit env :context/expression gen condition)
-       (. gen getStatic boolean-object-type "FALSE" boolean-object-type)
-       (. gen ifCmp boolean-object-type GeneratorAdapter/EQ false-label)))
+       :else
+       (do
+         (emit env :context/expression gen condition)
+         (. gen getStatic boolean-object-type "FALSE" boolean-object-type)
+         (. gen ifCmp boolean-object-type GeneratorAdapter/EQ false-label))))
     (emit env context gen then)
     (. gen goTo end-label)
     (. gen mark false-label)
@@ -1140,7 +1143,9 @@
   [env context ^GeneratorAdapter gen [_ & insns]]
   (let [labeled-env (assoc env :labels (atom {}))]
     (doseq [i insns]
-      (emit-jvm labeled-env context gen i))))
+      (emit-jvm labeled-env context gen i)))
+  (if (= context :context/statement)
+    (. gen pop)))
 
 (defn emit-explode-continuation
   [^GeneratorAdapter gen]
@@ -1201,10 +1206,17 @@
       (loop [lis listy
              new-list []]
         (if (seq lis)
-          (if (and (list-like? (first lis)))
-            (if (contains? specials (ffirst lis))
-              (recur (rest lis) (conj new-list (explode-special (first lis))))
-              (recur (rest lis) (conj new-list (explode (explode-invocation (first lis))))))
+          (if (list-like? (first lis))
+            (cond
+             (contains? specials (ffirst lis))
+             (recur (rest lis) (conj new-list (explode-special (first lis))))
+
+             ; keyword is either :jvm or clojure interop, no explosion
+             (keyword? (ffirst lis))
+             (recur (rest lis) (conj new-list (first lis)))
+
+             :else
+             (recur (rest lis) (conj new-list (explode (explode-invocation (first lis))))))
             (recur (rest lis) (conj new-list (first lis))))
           (seq->list (seq new-list)))))
     listy))

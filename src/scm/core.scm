@@ -44,6 +44,13 @@
   (foldr (lambda (x xs)
            (cons (f x) xs)) '() lis))
 
+(define (filter f lis)
+  (foldr (lambda (x xs)
+           (if (f x)
+             (cons x xs)
+             xs))
+         '() lis))
+
 (define (cat* l1 l2)
   (foldr cons l2 l1))
 
@@ -65,7 +72,6 @@
            (box boolean))))
 
 (define (list? x)
-  (#:println "original list?")
   (#:wombat.datatypes/list? x))
 
 (define (pair? x)
@@ -278,6 +284,14 @@
     #t
     #f))
 
+(define (expand-all form)
+  (if (list? form)
+    (let ([exp (expand form)])
+      (if (eq? form exp)
+        (map expand-all form)
+        (expand-all exp)))
+    form))
+
 (define (last lis)
   (if (null? lis)
     '()
@@ -347,15 +361,109 @@
     ([x y] (f y x))
     ([x y . zs] (apply f y x zs))))
 
+(define-macro <arithmetic>
+  (case-lambda
+    ([op x] `(#:jvm (#:emit ,x)
+                    (invokeStatic clojure.lang.Numbers (Number ,op Object Object))))
+    ([op x y] `(#:jvm (#:emit ,x)
+                      (#:emit ,y)
+                      (invokeStatic clojure.lang.Numbers (Number ,op Object Object))))))
+
+(define-macro (<instanceof> cls o)
+  `(#:jvm (#:emit ,o)
+          (instanceOf ,cls)
+          (box boolean)))
+
+(define-macro (add-inline name . lam)
+  (if (pair? name)
+    `(add-inline ,(car name) (lambda ,(cdr name) ,@lam))
+    (if (or (null? lam)
+            (not (null? (cdr lam))))
+      (fail "add-inline only takes one lambda")
+      `(#:wombat.compiler/add-inline! ',name ,@lam))))
+
+(define-macro (reify-macro name . lam)
+  (if (pair? name)
+    `(reify-macro ,(car name)
+                  (lambda ,(cdr name) ,@lam))
+    (if (or (null? lam)
+            (not (null? (cdr lam))))
+      (fail "reify-macro only takes one lambda")
+      `(#:wombat.compiler/add-function! ',name ,@lam))))
+
+(define-macro (define-with-inline name macro fun)
+  `(begin
+     (define-macro ,name ,macro)
+     (reify-macro ,name ,fun)))
+
+(define (resolve-class sym)
+  (let ([cls (#:wombat.compiler/clean-resolve sym)])
+    (#:jvm (#:emit cls)
+           (instanceOf Class)
+           (ifZCmp not= #:is-class)
+           (#:emit #f)
+           (goto #:end)
+           (label #:is-class)
+           (#:emit cls)
+           (label #:end))))
+
+(define (instance? c o)
+  (#:jvm (#:emit c)
+         (checkCast Class)
+         (#:emit o)
+         (invokeVirtual Class (boolean "isInstance" Object))
+         (box boolean)))
+
+(add-inline (instance? c o)
+  (if (and (#:jvm (#:macro <instanceof> clojure.lang.Symbol c))
+           (resolve-class c))
+    `(<instanceof> ,c ,o)
+    #!no-op))
+
+;; Redefine list? and pair? using faster instance?
+(define (list? o)
+  (or (null? o)
+      (instance? wombat.datatypes.IList o)))
+(define (pair? o)
+  (instance? wombat.datatypes.ICons o))
+(define (string? o)
+  (instance? String o))
+(define (number? o)
+  (instance? Number o))
+
+(define (complement f)
+  (lambda (x)
+    (let ([ret (not (f x))])
+      ret)))
+
+(define (arith-foldl f init coll)
+  (if (null? coll)
+    init
+    (arith-foldl f (f (car coll) init) (cdr coll))))
+
 (define-case +
   ([] 1)
   ([x] x)
-  ([x y]
-   (#:jvm (#:emit x)
-          (#:emit y)
-          (invokeStatic clojure.lang.Numbers (Number "addP" Object Object))))
+  ([x y] (<arithmetic> "addP" x y))
   ([x y . zs]
    (foldl + (+ x y) zs)))
+
+(add-inline +
+  (case-lambda
+    ([] 1)
+    ([x] (if (<instanceof> Number x)
+           x
+           `(<arithmetic> "addP" ,x)))
+    ([x y]
+     (if (and (<instanceof> Number x)
+              (<instanceof> Number y))
+       (+ x y)
+       `(<arithmetic> "addP" ,x ,y)))
+    ([x y . zs]
+     (let ([num-sum (apply + (filter number? (list* x y zs)))]
+           [rest (filter (complement number?) (list* x y zs))])
+       (arith-foldl (lambda (a b) `(+ ,a ,b))
+                    num-sum rest)))))
 
 (define-case -
   ([x] (- 0 x))
@@ -405,65 +513,6 @@
          (#:emit y)
          (invokeStatic clojure.lang.Numbers (boolean "equiv" Object Object))
          (box boolean)))
-
-(define-macro (add-inline name . lam)
-  (if (pair? name)
-    `(add-inline ,(car name) (lambda ,(cdr name) ,@lam))
-    (if (> (length lam) 1)
-      (fail "add-inline only takes one lambda")
-      `(#:wombat.compiler/add-inline! ',name ,@lam))))
-
-(define-macro (reify-macro name . lam)
-  (if (pair? name)
-    `(reify-macro ,(car name)
-                  (lambda ,(cdr name) ,@lam))
-    (if (> (length lam) 1)
-      (fail "reify-macro only takes one lambda")
-      `(#:wombat.compiler/add-function! ',name ,@lam))))
-
-(define-macro (define-with-inline name macro fun)
-  `(begin
-     (define-macro ,name ,macro)
-     (reify-macro ,name ,fun)))
-
-(define-macro (<instanceof> cls o)
-  (list #:jvm
-        (list #:emit o)
-        (list 'instanceOf cls)
-        (list 'box 'boolean)))
-
-(define (resolve-class sym)
-  (let ([cls (#:wombat.compiler/clean-resolve sym)])
-    (#:jvm (#:emit cls)
-           (instanceOf Class)
-           (ifZCmp not= #:is-class)
-           (#:emit #f)
-           (goto #:end)
-           (label #:is-class)
-           (#:emit cls)
-           (label #:end))))
-
-(define (instance? c o)
-  (#:jvm (#:emit c)
-         (checkCast Class)
-         (#:emit o)
-         (invokeVirtual Class (boolean "isInstance" Object))
-         (box boolean)))
-
-(add-inline (instance? c o)
-  (if (and (#:jvm (#:macro <instanceof> clojure.lang.Symbol c))
-           (resolve-class c))
-    (list '<instanceof> c o)
-    #!no-op))
-
-;; Redefine list? and pair? using faster instance?
-(define (list? o)
-  (or (null? o)
-      (instance? wombat.datatypes.IList o)))
-(define (pair? o)
-  (instance? wombat.datatypes.ICons o))
-(define (string? o)
-  (instance? String o))
 
 (define (fac n)
   (let loop ((n n)
