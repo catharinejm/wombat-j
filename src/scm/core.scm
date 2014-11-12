@@ -83,6 +83,9 @@
 (define (expand f)
   (#:wombat.compiler/expand f))
 
+(define (sanitize f)
+  (#:wombat.compiler/sanitize (#:hash-map) f))
+
 (define (obj->str o)
   (#:wombat.printer/write-str o))
 
@@ -608,3 +611,20 @@
        (begin
          ,@body
          (loop (sub1 n))))))
+
+(define (get-state)
+  (lambda (s) (cons s s)))
+(define (set-state s)
+  (lambda (_) (cons () s)))
+(define (pure-state a)
+  (lambda (s) (cons a s)))
+
+(define (map-state f)
+  (lambda (s)
+    (let ([s1 (s)])
+      (cons (f (car s1))
+            (cdr s1)))))
+
+(define (zip-index lis)
+  (foldl (lambda (a acc)
+           (let ([xs (map-state acc)])))))

@@ -58,6 +58,11 @@
 
            (identical? f -bad-input-)
            (recur)
+
+           (= f :reload!)
+           (do
+             (println "Reloading...")
+             :reload)
            
            (not= f :quit)
            (do
@@ -83,4 +88,11 @@
 (defn -main
   [& args]
   (bootstrap)
-  (repl))
+  (loop []
+    (when (= (repl) :reload)
+      (load "wombat/datatypes")
+      (load "wombat/reader")
+      (load "wombat/compiler")
+      (load "wombat/printer")
+      (bootstrap)
+      (recur))))
