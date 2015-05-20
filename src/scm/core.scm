@@ -51,11 +51,17 @@
              xs))
          '() lis))
 
-(define (cat* l1 l2)
-  (foldr cons l2 l1))
+(define (remove f lis)
+  (foldr (lambda (x xs)
+           (if (not (f x))
+             (cons x xs)
+             xs))
+         '() lis))
 
 (define (concat . ls)
-  (foldr cat* '() ls))
+  (letrec ([cat* (lambda (l1 l2)
+                   (foldr cons l2 l1))])
+    (foldr cat* '() ls)))
 
 ;; like null?, this relies on a special case in the compiler
 (define (eq? a b)
@@ -357,13 +363,6 @@
   (#:jvm (#:emit n)
          (invokeStatic clojure.lang.Numbers (Number "decP" Object))))
 
-(define (swap f)
-  (case-lambda
-    ([] (f))
-    ([x] (f x))
-    ([x y] (f y x))
-    ([x y . zs] (apply f y x zs))))
-
 (define-macro <arithmetic>
   (case-lambda
     ([op x] `(#:jvm (#:emit ,x)
@@ -442,7 +441,7 @@
 (define (arith-foldl f init coll)
   (if (null? coll)
     init
-    (arith-foldl f (f (car coll) init) (cdr coll))))
+    (arith-foldl f (f init (car coll)) (cdr coll))))
 
 (define-case +
   ([] 1)
@@ -464,7 +463,7 @@
        `(<arithmetic> "addP" ,x ,y)))
     ([x y . zs]
      (let ([num-sum (apply + (filter number? (list* x y zs)))]
-           [rest (filter (complement number?) (list* x y zs))])
+           [rest (remove number? (list* x y zs))])
        (arith-foldl (lambda (a b) `(+ ,a ,b))
                     num-sum rest)))))
 
@@ -475,7 +474,23 @@
           (#:emit y)
           (invokeStatic clojure.lang.Numbers (Number "minusP" Object Object))))
   ([x y . zs]
-   (foldl (swap -) (- x y) zs)))
+   (arith-foldl - (- x y) zs)))
+
+(add-inline -
+  (case-lambda
+    ([] #!no-op)
+    ([x] (if (<instanceof> Number x)
+           (- 0 x)
+           `(<arithmetic> "minusP" ,x)))
+    ([x y] (if (and (<instanceof> Number x)
+                    (<instanceof> Number y))
+             (- x y)
+             `(<arithmetic> "minusP" ,x ,y)))
+    ([x y . zs]
+     (let ([num-diff (apply - (filter number? (list* 0 y zs)))]
+           [rest (remove number? (list* y zs))])
+       `(+ x ,(arith-foldl (lambda (a b) `(- ,a ,b))
+                           num-diff (cdr rest)))))))
 
 (define (* x y)
   (#:jvm (#:emit x)
@@ -483,7 +498,7 @@
          (invokeStatic clojure.lang.Numbers (Number "multiplyP" Object Object))))
 
 (define (/ x y)
-    (#:jvm (#:emit x)
+  (#:jvm (#:emit x)
          (#:emit y)
          (invokeStatic clojure.lang.Numbers (Number "divide" Object Object))))
 

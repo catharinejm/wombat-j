@@ -476,9 +476,7 @@
   (. gen dup)
   (. gen push "DEBUG: ")
   (. gen invokeVirtual (asmtype java.io.Writer) (Method/getMethod "void write(String)"))
-  (. gen push "wombat.printer")
-  (. gen push "write-obj")
-  (. gen invokeStatic (asmtype RT) (Method/getMethod "clojure.lang.Var var(String,String)"))
+  (emit-var gen 'wombat.printer/write-obj)
   (. gen dupX2)
   (. gen pop)
   (. gen invokeVirtual (asmtype clojure.lang.Var) (Method/getMethod "Object invoke(Object,Object)"))
@@ -1172,7 +1170,7 @@
 (defn explode-let
   [the-let binds body]
   (list* the-let
-         (seq->list (map (fn [bind val]
+         (seq->list (map (fn [[bind val]]
                            (list bind
                                  (explode-invocation val)))
                          binds))

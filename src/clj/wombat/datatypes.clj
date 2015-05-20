@@ -104,7 +104,7 @@
   (assert-vector! v)
   (-vector-set! v i o))
 
-(deftype Vector [ary]
+(deftype Vector [^objects ary]
   IVector
   (-vector-length [v]
     (alength ary))
