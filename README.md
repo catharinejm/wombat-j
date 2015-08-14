@@ -6,12 +6,6 @@ Upon close inspection one might notice an extraordinary similarity between the W
 reader and compiler and the ones in Clojure. Truly a bizarre coincidence. If anything,
 it's evidence that both implementations were divinely inspired.
 
-My original focus was on learning the uses and limitations of invokeDynamic. It quickly
-became clear, however, that invokeDynamic doesn't play nice with higher-order functions,
-and therefore would not be terribly useful. However, MethodHandles were exactly what I
-wanted, which is to say I wanted to implement lambdas without doing what Clojure does and
-writing a gargantuan definition of apply and applyTo with 20 separate arities.
-
 Wombat-J requires at least Java 1.7, but runs considerably faster on 1.8. There is a
 100-200x performance boost between 1.7 and 1.8 when using MethodHandles, at least
 according to my rudimentary and totally undocumented benchmarks, performed nearly a year
@@ -27,6 +21,30 @@ it's been out for like 2 years at least. Get with the times, man!
 - I like to set inferior-lisp-program to "lein run". There's no readline, so it's pretty
   annoying otherwise. I guess rlwrap would work.
 - Don't do anything that doesn't work and it will work flawlessly!
+
+
+## Interesting Implementation Details
+
+My original focus was on learning the uses and limitations of invokeDynamic. I quickly
+discovered that it wasn't going to work very well with function objects, unless I had
+pre-defined interfaces for every arity. If I did that, then I may as well just use
+invokeInterface, and where's the fun in that? It seems to me that invokeDynamic is better
+suited to dynamic languages where a static type hierarchy does exist, but just isn't known
+till runtime. Duck typing, not so much. However, I did manage to use invokeDynamic, in
+conjunction with a VolatileCallSite, to create Wombat's version of Vars.
+
+Instead of invokeDynamic, the generated function classes have a static attribute
+containing a MethodHandle to each invoke method, one per arity. Invoking a function first
+calls getHandle with the desired arity, which returns the associated MethodHandle (or
+throws an arity exception) and then invokes the MethodHandle with the arguments on the
+stack. Apply is handled by unrolling the list of arguments onto the stack first. Variadic
+arities are handled by converting the MethodHandle for the variadic invoke method into a
+varargs collector.
+
+
+## Syntax and special forms
+
+Coming soon!
 
 
 ## License
