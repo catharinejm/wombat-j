@@ -192,8 +192,9 @@
                        (if (not (null? (#:get (#:deref gs-env) val)))
                          (#:get (#:deref gs-env) val)
                          (let* ([basename (base nm)]
-                                [auto-nm (#:wombat.compiler/sanitize-name
-                                          (#:str basename "__auto"))])
+                                [auto-nm (#:symbol (#:str basename "__#"
+                                                          (#:wombat.compiler/next-id)
+                                                          "__auto"))])
                            (begin (#:swap! gs-env (get-var 'clojure.core/assoc) val auto-nm)
                                   auto-nm)))
                        val))

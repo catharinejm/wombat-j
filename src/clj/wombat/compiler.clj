@@ -73,7 +73,7 @@
     'unquote-splicing})
 
 (defn sanitized? [s]
-  (re-find #"__#\d+$" (str s)))
+  (re-find #"__#\d+(?:__auto)?$" (str s)))
 
 (defn sanitize-name
   [sym]
@@ -101,9 +101,6 @@
     (cond
      (contains? env sym)
      (env sym)
-
-     (sanitized? sym)
-     sym
 
      (special-token? sym)
      sym
