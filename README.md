@@ -29,20 +29,6 @@ it's been out for like 2 years at least. Get with the times, man!
 - Don't do anything that doesn't work and it will work flawlessly!
 
 
-## Known Issues
-
-Macros aren't as hygenic as I thought. So don't try to get clever!
-```scm
-(let ((tmp 42))
-  (or #f tmp))
-;=> #f
-```
-D'oh! What happened?
-```scm
-(expand-all '(let ((tmp 42)) (or #f tmp)))
-;=> (let ((tmp 10)) (let ((tmp #f)) (if tmp tmp tmp)))
-```
-
 ## License
 
 Copyright © 2014-2015 Jon Distad
