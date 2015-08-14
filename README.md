@@ -18,9 +18,9 @@ it's been out for like 2 years at least. Get with the times, man!
 
 - Install Java 1.8 and [Leiningen](http://leiningen.org)
 - `lein run`
-- I like to set inferior-lisp-program to "lein run". There's no readline, so it's pretty
-  annoying otherwise. I guess rlwrap would work.
-- Don't do anything that doesn't work and it will work flawlessly!
+- I like to set inferior-lisp-program to "lein run" and run the REPL in emacs. There's no
+  readline support, so it's pretty tedious otherwise. I suppose rlwrap would work, though
+  I haven't tried it.
 
 
 ## Interesting Implementation Details
