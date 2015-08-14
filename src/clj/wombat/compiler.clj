@@ -72,9 +72,14 @@
     'unquote
     'unquote-splicing})
 
+(defn sanitized? [s]
+  (re-find #"__#\d+$" (str s)))
+
 (defn sanitize-name
   [sym]
-  (symbol (str sym "__#" (next-id))))
+  (if (sanitized? sym)
+    sym
+    (symbol (str sym "__#" (next-id)))))
 
 (defn extend-env
   [env syms]
@@ -96,6 +101,9 @@
     (cond
      (contains? env sym)
      (env sym)
+
+     (sanitized? sym)
+     sym
 
      (special-token? sym)
      sym

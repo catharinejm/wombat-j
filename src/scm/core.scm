@@ -83,6 +83,9 @@
 (define (pair? x)
   (#:wombat.datatypes/pair? x))
 
+(define (symbol? o)
+  (#:symbol? o))
+
 (define (print o)
   (#:print o))
 
@@ -130,36 +133,101 @@
     ([f x y z . rest]
      (apply f (cons x (cons y (cons z (apply list* rest))))))))
 
-(define (quasiquote-pair* c l ls)
-  (if (null? c)
-    (list 'apply 'concat (cons 'list (reverse (cons (cons 'list (reverse l)) ls))))
-    (if (pair? (car c))
-      (if (eqv? (car (car c)) 'unquote)
-        (quasiquote-pair* (cdr c)
-                          (cons (car (cdr (car c))) l)
-                          ls)
-        (if (eqv? (car (car c)) 'unquote-splicing)
-          (quasiquote-pair* (cdr c)
-                            '()
-                            (list* (car (cdr (car c))) (cons 'list (reverse l)) ls))
-          (if (eqv? (car (car c)) 'quasiquote)
-            (quasiquote-pair* (cdr c)
-                              (cons (car c) l)
-                              ls)
-            (quasiquote-pair* (cdr c)
-                              (cons (quasiquote-pair* (car c) '() '()) l)
-                              ls))))
-      (quasiquote-pair* (cdr c) (cons (list 'quote (car c)) l) ls))))
+(define (namespace named)
+  (#:jvm (#:emit named)
+         (checkCast clojure.lang.Named)
+         (invokeInterface clojure.lang.Named (String "getNamespace"))))
+
+(define (name named)
+  (#:jvm (#:emit named)
+         (checkCast clojure.lang.Named)
+         (invokeInterface clojure.lang.Named (String "getName"))))
+
+(define (get-var sym)
+  (#:jvm (#:invoke namespace sym)
+         (checkCast String)
+         (#:invoke name sym)
+         (checkCast String)
+         (invokeStatic clojure.lang.RT (clojure.lang.Var "var" String String))))
+
+(define (class obj)
+  (if (null? obj)
+    '()
+    (#:jvm (#:emit obj)
+           (invokeVirtual Object (Class "getClass")))))
+
+(define (last lis)
+  (if (null? lis)
+    '()
+    (if (null? (cdr lis))
+      (car lis)
+      (last (cdr lis)))))
+
+(define (butlast lis)
+  (if (null? lis)
+    '()
+    (if (null? (cdr lis))
+      '()
+      (cons (car lis) (butlast (cdr lis))))))
+
+(define-macro (let* binds . body)
+  (foldr (lambda (l r) (list 'let (list l) r))
+         (cons 'begin body) binds))
+
+(define (quasiquote* x)
+  (letrec ([gs-env (#:atom (#:hash-map))]
+           [base (lambda (nm)
+                   (#:jvm (push int 0)                          ; 0
+                          (#:emit nm)                           ; 0, nm
+                          (checkCast String)
+                          (dupX1)                               ; nm, 0, nm
+                          (invokeVirtual String (int "length")) ; nm, 0, len
+                          (push int 1)                          ; nm, 0, len, 1
+                          (sub int)                             ; nm, 0, len-1
+                          (invokeVirtual String (String "substring" int int))))]
+           [gs (lambda (val)
+                 (if (symbol? val)
+                   (let ([nm (name val)])
+                     (if (eqv? #\# (last (list! nm)))
+                       (if (not (null? (#:get (#:deref gs-env) val)))
+                         (#:get (#:deref gs-env) val)
+                         (let* ([basename (base nm)]
+                                [auto-nm (#:wombat.compiler/sanitize-name
+                                          (#:str basename "__auto"))])
+                           (begin (#:swap! gs-env (get-var 'clojure.core/assoc) val auto-nm)
+                                  auto-nm)))
+                       val))
+                   val))]
+           [qp* (lambda (c l ls)
+                  (if (null? c)
+                    (list 'apply 'concat (cons 'list (reverse (cons (cons 'list (reverse l)) ls))))
+                    (if (pair? (car c))
+                      (if (eqv? (car (car c)) 'unquote)
+                        (qp* (cdr c)
+                             (cons (car (cdr (car c))) l)
+                             ls)
+                        (if (eqv? (car (car c)) 'unquote-splicing)
+                          (qp* (cdr c)
+                               '()
+                               (list* (car (cdr (car c))) (cons 'list (reverse l)) ls))
+                          (if (eqv? (car (car c)) 'quasiquote)
+                            (qp* (cdr c)
+                                 (cons (car c) l)
+                                 ls)
+                            (qp* (cdr c)
+                                 (cons (qp* (car c) '() '()) l)
+                                 ls))))
+                      (qp* (cdr c) (cons (list 'quote (gs (car c))) l) ls))))])
+    (if (pair? x)
+      (if (eqv? (car x) 'unquote)
+        (car (cdr x))
+        (if (eqv? (car x) 'unquote-splicing)
+          (#:jvm (throwException RuntimeException "unquote-splicing outside of list!"))
+          (qp* x '() '())))
+      (list 'quote (gs x)))))
 
 (define-macro (quasiquote x)
-  (let ((res (if (pair? x)
-               (if (eqv? (car x) 'unquote)
-                 (car (cdr x))
-                 (if (eqv? (car x) 'unquote-splicing)
-                   (#:jvm (throwException RuntimeException "unquote-splicing outside of list!"))
-                   (quasiquote-pair* x '() '())))
-               (list 'quote x))))
-    res))
+  (quasiquote* x))
 
 (define-macro (fail msg)
   `(#:jvm (throwException RuntimeException ,msg)))
@@ -177,10 +245,6 @@
 (define-macro (cddar l) `(cdr (cdar ,l)))
 (define-macro (cdddr l) `(cdr (cddr ,l)))
 
-(define-macro (let* binds . body)
-  (foldr (lambda (l r) (list 'let (list l) r))
-         (cons 'begin body) binds))
-
 (define-macro (and . vals)
   (if (null? vals)
     #t
@@ -194,12 +258,12 @@
   (if (null? vals)
     #t
     (if (null? (cdr vals))
-      `(let ((tmp ,(car vals)))
-         (and (not (null? tmp))
-              tmp))
-      `(let ((temp ,(car vals)))
-         (and (not (null? tmp))
-              tmp
+      `(let ((tmp# ,(car vals)))
+         (and (not (null? tmp#))
+              tmp#))
+      `(let ((tmp# ,(car vals)))
+         (and (not (null? tmp#))
+              tmp#
               (and* ,@(cdr vals)))))))
 
 (define-macro (or . vals)
@@ -207,21 +271,21 @@
     #f
     (if (null? (cdr vals))
       (car vals)
-      `(let ((tmp ,(car vals)))
-         (if tmp
-           tmp
+      `(let ((tmp# ,(car vals)))
+         (if tmp#
+           tmp#
            (or ,@(cdr vals)))))))
 
 (define-macro (or* . vals)
   (if (null? vals)
     #f
     (if (null? (cdr vals))
-      `(let ((tmp ,(car vals)))
-         (and (not (null? tmp))
-              tmp))
-      `(let ((tmp ,(car vals)))
-         (or (and (not (null? tmp))
-                  tmp)
+      `(let ((tmp# ,(car vals)))
+         (and (not (null? tmp#))
+              tmp#))
+      `(let ((tmp# ,(car vals)))
+         (or (and (not (null? tmp#))
+                  tmp#)
              (or* ,@(cdr vals)))))))
 
 (define-macro (if* cond then . else)
@@ -301,12 +365,6 @@
         (expand-all exp)))
     form))
 
-(define (last lis)
-  (if (null? lis)
-    '()
-    (if (null? (cdr lis))
-      (car lis)
-      (last (cdr lis)))))
 
 ;; (define-macro new
 ;;   (lambda (c)
@@ -331,29 +389,6 @@
 ;;                (if (string? v)
 ;;                  (call (StringBuilder sb) (StringBuilder "append" String))
 ;;                  (call (StringBuilder sb) (StringBuilder "append"))))))))
-
-(define (namespace named)
-  (#:jvm (#:emit named)
-         (checkCast clojure.lang.Named)
-         (invokeInterface clojure.lang.Named (String "getNamespace"))))
-
-(define (name named)
-  (#:jvm (#:emit named)
-         (checkCast clojure.lang.Named)
-         (invokeInterface clojure.lang.Named (String "getName"))))
-
-(define (get-var sym)
-  (#:jvm (#:invoke namespace sym)
-         (checkCast String)
-         (#:invoke name sym)
-         (checkCast String)
-         (invokeStatic clojure.lang.RT (clojure.lang.Var "var" String String))))
-
-(define (class obj)
-  (if (null? obj)
-    '()
-    (#:jvm (#:emit obj)
-           (invokeVirtual Object (Class "getClass")))))
 
 (define (add1 n)
   (#:jvm (#:emit n)
@@ -614,18 +649,18 @@
 ;;   (m1 n))
 
 (define-macro (time . body)
-  `(let ((start (#:jvm (invokeStatic System (long "nanoTime")) (box long)))
-         (ret (begin ,@body))
-         (end (#:jvm (invokeStatic System (long "nanoTime")) (box long))))
-     (#:printf "time: %.3f ms\n" (#:- (#:/ (#:double end) 1000000) (#:/ (#:double start) 1000000)))
-     ret))
+  `(let ((start# (#:jvm (invokeStatic System (long "nanoTime")) (box long)))
+         (ret# (begin ,@body))
+         (end# (#:jvm (invokeStatic System (long "nanoTime")) (box long))))
+     (#:printf "time: %.3f ms\n" (#:- (#:/ (#:double end#) 1000000) (#:/ (#:double start#) 1000000)))
+     ret#))
 
 (define-macro (dotimes n . body)
-  `(let loop ((n ,n))
-     (if (> n 0)
+  `(let loop# ((n# ,n))
+     (if (> n# 0)
        (begin
          ,@body
-         (loop (sub1 n))))))
+         (loop# (sub1 n#))))))
 
 (define (get-state)
   (lambda (s) (cons s s)))
